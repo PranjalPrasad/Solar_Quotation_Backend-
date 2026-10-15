@@ -1,0 +1,5 @@
+package com.solar.Quotation.Enum;
+
+public enum AuditAction {
+    CREATE, UPDATE, DELETE, STATUS_CHANGE, APPROVE, REJECT, CONVERT, LOGIN, LOGOUT, PASSWORD_RESET, MARK_PAID, PERMISSION_CHANGE
+}

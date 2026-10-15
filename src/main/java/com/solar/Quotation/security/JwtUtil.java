@@ -1,5 +1,4 @@
 package com.solar.Quotation.security;
-
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
@@ -10,48 +9,35 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
 
+/** Token carries only userId, roleCode, partnerId. Permissions are NOT stored here. */
 @Component
 public class JwtUtil {
 
-    @Value("${jwt.secret}")
-    private String secret;
+    private final SecretKey key;
+    private final long accessMinutes;
 
-    @Value("${jwt.expiration-ms:86400000}")
-    private long expirationMs;
-
-    private SecretKey key() {
-        return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    public JwtUtil(@Value("${sqms.jwt.secret}") String secret,
+                   @Value("${sqms.jwt.access-token-minutes}") long accessMinutes) {
+        this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+        this.accessMinutes = accessMinutes;
     }
 
-    public String generateToken(Long userId, String username, String role, Long partnerId) {
-        Date now = new Date();
-        Date expiry = new Date(now.getTime() + expirationMs);
-
+    public String createAccessToken(Long userId, String roleCode, Long partnerId) {
+        long now = System.currentTimeMillis();
         return Jwts.builder()
-                .subject(username)
-                .claim("userId", userId)
-                .claim("role", role)
+                .subject(String.valueOf(userId))
+                .claim("roleCode", roleCode)
                 .claim("partnerId", partnerId)
-                .issuedAt(now)
-                .expiration(expiry)
-                .signWith(key())
+                .issuedAt(new Date(now))
+                .expiration(new Date(now + accessMinutes * 60_000L))
+                .signWith(key)
                 .compact();
     }
 
-    public Claims parseClaims(String token) {
-        return Jwts.parser()
-                .verifyWith(key())
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
+    /** Throws JwtException when invalid or expired. */
+    public Claims parse(String token) {
+        return Jwts.parser().verifyWith(key).build().parseSignedClaims(token).getPayload();
     }
 
-    public boolean isValid(String token) {
-        try {
-            parseClaims(token);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
+    public long getAccessSeconds() { return accessMinutes * 60L; }
 }
