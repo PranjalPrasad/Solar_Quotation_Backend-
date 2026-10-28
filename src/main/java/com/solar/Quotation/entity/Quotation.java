@@ -14,12 +14,6 @@ import jakarta.persistence.UniqueConstraint;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
-/**
- * A quotation belongs to exactly one channel partner (TenantBaseEntity.channelPartnerId).
- * All money columns are computed on the server (QuotationCalculator) and stored, so a later change in
- * GST / subsidy settings never silently changes an old quotation.
- * Line items live in QuotationItem.
- */
 @Entity
 @Table(name = "quotation",
         uniqueConstraints = @UniqueConstraint(columnNames = {"channel_partner_id", "code"}),
@@ -130,12 +124,12 @@ public class Quotation extends TenantBaseEntity {
     @Column(name = "referrer_type", length = 30)
     private String referrerType;
 
-    /** Set only when referrerType is CHANNEL_PARTNER. This is the link the Referral module pays against. */
+    @Column(name = "referral_code", length = 30)
+    private String referralCode;
+
+    /** Set when the referrer is a channel partner; null for customer / other referrers. */
     @Column(name = "referrer_partner_id")
     private Long referrerPartnerId;
-
-    @Column(name = "referral_code", length = 40)
-    private String referralCode;
 
     @Column(name = "referral_percent", precision = 5, scale = 2)
     private BigDecimal referralPercent;
@@ -143,7 +137,6 @@ public class Quotation extends TenantBaseEntity {
     @Column(name = "referral_amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal referralAmount = BigDecimal.ZERO;
 
-    /** Mirror of Referral.status, kept in sync by ReferralServiceImpl. Empty when there is no payable referral. */
     @Enumerated(EnumType.STRING)
     @Column(name = "referral_status", length = 20)
     private ReferralStatus referralStatus;
@@ -167,6 +160,9 @@ public class Quotation extends TenantBaseEntity {
     @Column(name = "cgst_amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal cgstAmount = BigDecimal.ZERO;
 
+    @Column(name = "gst_amount", nullable = false, precision = 14, scale = 2)   // ← NEW
+    private BigDecimal gstAmount = BigDecimal.ZERO;
+
     @Column(name = "total_amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal totalAmount = BigDecimal.ZERO;
 
@@ -178,6 +174,16 @@ public class Quotation extends TenantBaseEntity {
 
     @Column(name = "net_investment", nullable = false, precision = 14, scale = 2)
     private BigDecimal netInvestment = BigDecimal.ZERO;
+
+    // --- referral payout (added for the referral module) ---
+    @Column(name = "referral_paid_date")
+    private LocalDate referralPaidDate;
+
+    @Column(name = "referral_payment_ref", length = 60)
+    private String referralPaymentRef;
+
+    @Column(name = "referral_payment_remarks", length = 300)
+    private String referralPaymentRemarks;
 
     public String getCode() { return code; }
     public void setCode(String code) { this.code = code; }
@@ -263,6 +269,8 @@ public class Quotation extends TenantBaseEntity {
     public void setSgstAmount(BigDecimal sgstAmount) { this.sgstAmount = sgstAmount; }
     public BigDecimal getCgstAmount() { return cgstAmount; }
     public void setCgstAmount(BigDecimal cgstAmount) { this.cgstAmount = cgstAmount; }
+    public BigDecimal getGstAmount() { return gstAmount; }                    // ← NEW
+    public void setGstAmount(BigDecimal gstAmount) { this.gstAmount = gstAmount; }
     public BigDecimal getTotalAmount() { return totalAmount; }
     public void setTotalAmount(BigDecimal totalAmount) { this.totalAmount = totalAmount; }
     public BigDecimal getBalanceAmount() { return balanceAmount; }
@@ -271,4 +279,13 @@ public class Quotation extends TenantBaseEntity {
     public void setSubsidyAmount(BigDecimal subsidyAmount) { this.subsidyAmount = subsidyAmount; }
     public BigDecimal getNetInvestment() { return netInvestment; }
     public void setNetInvestment(BigDecimal netInvestment) { this.netInvestment = netInvestment; }
+    // --- getters/setters ---
+    public LocalDate getReferralPaidDate() { return referralPaidDate; }
+    public void setReferralPaidDate(LocalDate referralPaidDate) { this.referralPaidDate = referralPaidDate; }
+
+    public String getReferralPaymentRef() { return referralPaymentRef; }
+    public void setReferralPaymentRef(String referralPaymentRef) { this.referralPaymentRef = referralPaymentRef; }
+
+    public String getReferralPaymentRemarks() { return referralPaymentRemarks; }
+    public void setReferralPaymentRemarks(String referralPaymentRemarks) { this.referralPaymentRemarks = referralPaymentRemarks; }
 }

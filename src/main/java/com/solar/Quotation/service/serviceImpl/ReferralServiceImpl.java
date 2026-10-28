@@ -376,8 +376,9 @@ public class ReferralServiceImpl implements ReferralService {
 
     private ReferralStatus statusFor(QuotationStatus s) {
         return switch (s) {
-            case ACCEPTED -> ReferralStatus.APPROVED;
-            case REJECTED -> ReferralStatus.REJECTED;
+            // A referral is only marked PAID through the mark-paid action, never from the quotation status.
+            case ACCEPTED, APPROVED, PAID -> ReferralStatus.APPROVED;
+            case REJECTED, EXPIRED -> ReferralStatus.REJECTED;
             case PENDING -> ReferralStatus.PENDING;
         };
     }

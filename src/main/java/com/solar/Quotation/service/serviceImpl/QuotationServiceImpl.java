@@ -3,8 +3,7 @@ package com.solar.Quotation.service.serviceImpl;
 import com.solar.Quotation.Enum.AuditAction;
 import com.solar.Quotation.Enum.DiscountType;
 import com.solar.Quotation.Enum.QuotationStatus;
-import com.solar.Quotation.Enum.PartnerType;
-import com.solar.Quotation.Enum.RecordStatus;
+import com.solar.Quotation.Enum.ReferralStatus;
 import com.solar.Quotation.dto.requestdto.QuotationFilterRequestDto;
 import com.solar.Quotation.dto.requestdto.QuotationItemRequestDto;
 import com.solar.Quotation.dto.requestdto.QuotationRequestDto;
@@ -19,21 +18,22 @@ import com.solar.Quotation.dto.responsedto.QuotationItemResponseDto;
 import com.solar.Quotation.dto.responsedto.QuotationListItemResponseDto;
 import com.solar.Quotation.dto.responsedto.QuotationResponseDto;
 import com.solar.Quotation.dto.responsedto.QuotationSummaryResponseDto;
-import com.solar.Quotation.entity.ChannelPartner;
 import com.solar.Quotation.entity.Customer;
 import com.solar.Quotation.entity.Project;
 import com.solar.Quotation.entity.Quotation;
 import com.solar.Quotation.entity.QuotationItem;
 import com.solar.Quotation.exception.BusinessException;
 import com.solar.Quotation.exception.ResourceNotFoundException;
-import com.solar.Quotation.repository.ChannelPartnerRepository;
 import com.solar.Quotation.repository.CustomerRepository;
 import com.solar.Quotation.repository.ProductRepository;
 import com.solar.Quotation.repository.ProjectRepository;
 import com.solar.Quotation.repository.QuotationItemRepository;
 import com.solar.Quotation.repository.QuotationRepository;
 import com.solar.Quotation.security.TenantResolver;
-import com.solar.Quotation.service.*;
+import com.solar.Quotation.service.AuditService;
+import com.solar.Quotation.service.PartnerRefProvider;
+import com.solar.Quotation.service.QuotationService;
+import com.solar.Quotation.service.SettingsProvider;
 import com.solar.Quotation.util.AuditInfoMapper;
 import com.solar.Quotation.util.CodeGenerator;
 import com.solar.Quotation.util.DiffUtil;
@@ -78,18 +78,13 @@ public class QuotationServiceImpl implements QuotationService {
     private final AuditService auditService;
     private final CodeGenerator codeGenerator;
     private final SettingsProvider settingsProvider;
-    private final ChannelPartnerRepository channelPartnerRepository;
-    private final ReferralService referralService;
-    private final QuotationHistoryService historyService;
 
     public QuotationServiceImpl(QuotationRepository quotationRepository, QuotationItemRepository itemRepository,
                                 CustomerRepository customerRepository, ProjectRepository projectRepository,
                                 ProductRepository productRepository, TenantResolver tenantResolver,
                                 PartnerRefProvider partnerRefProvider, AuditInfoMapper auditInfoMapper,
                                 AuditService auditService, CodeGenerator codeGenerator,
-                                SettingsProvider settingsProvider, ChannelPartnerRepository channelPartnerRepository,
-                                ReferralService referralService,
-                                QuotationHistoryService historyService) {
+                                SettingsProvider settingsProvider) {
         this.quotationRepository = quotationRepository;
         this.itemRepository = itemRepository;
         this.customerRepository = customerRepository;
@@ -101,9 +96,6 @@ public class QuotationServiceImpl implements QuotationService {
         this.auditService = auditService;
         this.codeGenerator = codeGenerator;
         this.settingsProvider = settingsProvider;
-        this.channelPartnerRepository = channelPartnerRepository;
-        this.referralService = referralService;
-        this.historyService = historyService;
     }
 
     // ---------------------------------------------------------------- read
@@ -117,7 +109,7 @@ public class QuotationServiceImpl implements QuotationService {
                 f.getCustomerId(), f.getReferred(), f.getFromDate(), f.getToDate(), f.getSearchOrNull(),
                 f.toPageable("createdAt,desc", SORT_FIELDS));
         ListLookup lookup = listLookup(page.getContent());
-        return PageResponse.of(page, q -> toListItem(q, lookup));
+        return PageResponse.of(page.map(q -> toListItem(q, lookup)));
     }
 
     @Override
@@ -182,11 +174,9 @@ public class QuotationServiceImpl implements QuotationService {
         Quotation saved = quotationRepository.save(q);
 
         saveItems(saved, items);
-        referralService.syncFromQuotation(saved);
 
         auditService.record(AuditAction.CREATE, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
                 partnerId, DiffUtil.diff(null, snapshot(saved, items)));
-        historyService.recordCreated(saved.getId(), saved.getCode(), snapshot(saved, items));
         return toResponse(saved, items);
     }
 
@@ -217,12 +207,9 @@ public class QuotationServiceImpl implements QuotationService {
 
         itemRepository.deleteByQuotationId(saved.getId());
         saveItems(saved, items);
-        referralService.syncFromQuotation(saved);
 
-        Map<String, Object> after = snapshot(saved, items);
         auditService.record(AuditAction.UPDATE, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, after));
-        historyService.recordUpdated(saved.getId(), saved.getCode(), before, after);
+                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved, items)));
         return toResponse(saved, items);
     }
 
@@ -233,17 +220,16 @@ public class QuotationServiceImpl implements QuotationService {
         List<QuotationItem> items = itemRepository.findByQuotationIdOrderBySortOrderAsc(q.getId());
         Map<String, Object> before = snapshot(q, items);
 
-        QuotationStatus prev = q.getStatus();
         QuotationStatus next = QuotationStatus.valueOf(req.getStatus());
         q.setStatus(next);
-        // the Referral module follows the quotation: ACCEPTED -> APPROVED, REJECTED -> REJECTED, PENDING -> PENDING
-        referralService.onQuotationStatusChanged(q);
+        // A referred quotation that gets accepted becomes a payable referral request (Channel Partner module approves it)
+        if (next == QuotationStatus.ACCEPTED && q.isReferred() && q.getReferralStatus() == null) {
+            q.setReferralStatus(ReferralStatus.PENDING);
+        }
         Quotation saved = quotationRepository.save(q);
 
-        Map<String, Object> after = snapshot(saved, items);
         auditService.record(AuditAction.STATUS_CHANGE, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, after));
-        historyService.recordStatusChanged(saved.getId(), saved.getCode(), prev.name(), next.name(), after);
+                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved, items)));
         return toResponse(saved, items);
     }
 
@@ -254,11 +240,8 @@ public class QuotationServiceImpl implements QuotationService {
         if (q.getStatus() == QuotationStatus.ACCEPTED) {
             throw new BusinessException("BUSINESS_RULE", "An accepted quotation cannot be deleted");
         }
-        referralService.onQuotationDeleted(q);
         String code = q.getCode();
         Long partnerId = q.getChannelPartnerId();
-        List<QuotationItem> itemsBeforeDelete = itemRepository.findByQuotationIdOrderBySortOrderAsc(q.getId());
-        historyService.recordDeleted(id, code, snapshot(q, itemsBeforeDelete));
         q.setDeleted(true);
         quotationRepository.save(q);
         auditService.record(AuditAction.DELETE, "QUOTATION", "Quotation", id, code, partnerId, null);
@@ -367,6 +350,7 @@ public class QuotationServiceImpl implements QuotationService {
         q.setTaxableAmount(t.taxable);
         q.setSgstAmount(t.sgst);
         q.setCgstAmount(t.cgst);
+        q.setGstAmount(MoneyUtil.scale(t.sgst.add(t.cgst)));
         q.setTotalAmount(t.total);
 
         BigDecimal advance = MoneyUtil.scale(req.getAdvance());
@@ -444,59 +428,35 @@ public class QuotationServiceImpl implements QuotationService {
             q.setReferred(false);
             q.setReferredBy(null);
             q.setReferrerType(null);
-            q.setReferrerPartnerId(null);
             q.setReferralCode(null);
+            q.setReferrerPartnerId(null);
             q.setReferralPercent(null);
             q.setReferralAmount(BigDecimal.ZERO.setScale(2));
             q.setReferralStatus(null);
             return;
         }
-        String type = blankToNull(r.getReferrerType());
-        if (r.getReferrerPartnerId() != null) {
-            type = "CHANNEL_PARTNER";
-        }
         String by = blankToNull(r.getReferredBy());
-        String code = blankToNull(r.getReferralCode());
-        BigDecimal percent = r.getReferralPercent();
-        Long referrerPartnerId = null;
-
-        if ("CHANNEL_PARTNER".equals(type)) {
-            if (r.getReferrerPartnerId() == null) {
-                throw new BusinessException("VALIDATION_ERROR", "Select the referring channel partner");
-            }
-            // a referring partner is a real partner: active, a normal partner (not the platform) and never the owner itself
-            ChannelPartner cp = channelPartnerRepository.findByIdAndDeletedFalse(r.getReferrerPartnerId())
-                    .orElseThrow(() -> new BusinessException("VALIDATION_ERROR", "Referring channel partner not found"));
-            if (cp.getPartnerType() != PartnerType.PARTNER || cp.getStatus() != RecordStatus.ACTIVE) {
-                throw new BusinessException("VALIDATION_ERROR", "Referring channel partner is not active");
-            }
-            if (cp.getId().equals(q.getChannelPartnerId())) {
-                throw new BusinessException("VALIDATION_ERROR", "A partner cannot refer its own quotation");
-            }
-            referrerPartnerId = cp.getId();
-            by = cp.getName();
-            code = cp.getReferralCode() != null ? cp.getReferralCode() : cp.getCode();
-            if (percent == null) {
-                percent = cp.getReferralPercent();
-            }
-        }
         if (by == null) {
             throw new BusinessException("VALIDATION_ERROR", "Referred by is required when the quotation is a referral");
         }
-        if (percent == null) {
-            percent = defaults.getCustomerReferralPercent() != null ? defaults.getCustomerReferralPercent() : BigDecimal.ZERO;
-        }
+        BigDecimal percent = r.getReferralPercent() != null ? r.getReferralPercent()
+                : (defaults.getCustomerReferralPercent() != null ? defaults.getCustomerReferralPercent() : BigDecimal.ZERO);
+        String code = blankToNull(r.getReferralCode());
         if (code == null) {
             code = q.getReferralCode() != null ? q.getReferralCode() : (preview ? null : generateReferralCode(by));
         }
+        boolean wasReferred = q.isReferred();
         q.setReferred(true);
         q.setReferredBy(by);
-        q.setReferrerType(type);
-        q.setReferrerPartnerId(referrerPartnerId);
+        q.setReferrerType(blankToNull(r.getReferrerType()));
         q.setReferralCode(code);
+        q.setReferrerPartnerId(r.getReferrerPartnerId());
         q.setReferralPercent(percent.setScale(2, RoundingMode.HALF_UP));
         q.setReferralAmount(MoneyUtil.percentOf(total, percent));
-        // referralStatus is owned by the Referral module (syncFromQuotation sets it after the save)
+        if (!wasReferred || q.getReferralStatus() == null) {
+            // starts as PENDING only once the quotation is accepted; until then it stays empty
+            q.setReferralStatus(q.getStatus() == QuotationStatus.ACCEPTED ? ReferralStatus.PENDING : null);
+        }
     }
 
     /** Initials of the name + 4 digits, for example "Priya Nair" -> PN4821. */
@@ -560,7 +520,6 @@ public class QuotationServiceImpl implements QuotationService {
         m.put("tariff", plain(q.getTariff()));
         m.put("escalationPercent", plain(q.getEscalationPercent()));
         m.put("referredBy", q.isReferred() ? q.getReferredBy() : null);
-        m.put("referrerPartnerId", q.isReferred() ? q.getReferrerPartnerId() : null);
         m.put("referralPercent", plain(q.getReferralPercent()));
         m.put("terms", q.getTerms());
         return m;
@@ -705,8 +664,8 @@ public class QuotationServiceImpl implements QuotationService {
         r.setReferred(q.isReferred());
         r.setReferredBy(q.getReferredBy());
         r.setReferrerType(q.getReferrerType());
-        r.setReferrerPartnerId(q.getReferrerPartnerId());
         r.setReferralCode(q.getReferralCode());
+        r.setReferrerPartnerId(q.getReferrerPartnerId());
         r.setReferralPercent(q.getReferralPercent());
         r.setReferralAmount(q.getReferralAmount());
         r.setReferralStatus(q.getReferralStatus() == null ? null : q.getReferralStatus().name());

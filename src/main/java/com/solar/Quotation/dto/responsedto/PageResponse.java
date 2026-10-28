@@ -13,16 +13,26 @@ public class PageResponse<T> {
     private long totalElements;
     private int totalPages;
 
-    public PageResponse() { }
+    public PageResponse() {}
 
-    public static <E, T> PageResponse<T> of(Page<E> p, Function<E, T> mapper) {
-        PageResponse<T> r = new PageResponse<>();
-        r.content = p.getContent().stream().map(mapper).toList();
-        r.page = p.getNumber();
-        r.size = p.getSize();
-        r.totalElements = p.getTotalElements();
-        r.totalPages = p.getTotalPages();
-        return r;
+    public PageResponse(List<T> content, int page, int size, long totalElements, int totalPages) {
+        this.content = content;
+        this.page = page;
+        this.size = size;
+        this.totalElements = totalElements;
+        this.totalPages = totalPages;
+    }
+
+    public static <T> PageResponse<T> of(Page<T> page) {
+        return new PageResponse<>(page.getContent(), page.getNumber(), page.getSize(),
+                page.getTotalElements(), page.getTotalPages());
+    }
+
+    /** Maps each element while copying the paging data, so callers can pass a mapper directly. */
+    public static <S, T> PageResponse<T> of(Page<S> page, Function<? super S, ? extends T> mapper) {
+        List<T> content = page.getContent().stream().<T>map(mapper).toList();
+        return new PageResponse<>(content, page.getNumber(), page.getSize(),
+                page.getTotalElements(), page.getTotalPages());
     }
 
     public List<T> getContent() { return content; }

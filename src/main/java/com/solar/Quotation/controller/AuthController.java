@@ -60,7 +60,6 @@ public class AuthController {
         return ApiResponse.ok(null, "Password changed. Please log in again.");
     }
 
-    /** Same answer whether or not the account exists, so the endpoint cannot be used to find valid users. */
     @PostMapping("/forgot-password")
     public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequestDto req) {
         passwordResetService.requestReset(req);
