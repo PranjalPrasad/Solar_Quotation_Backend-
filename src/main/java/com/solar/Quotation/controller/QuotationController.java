@@ -54,11 +54,6 @@ public class QuotationController {
         return ApiResponse.ok(service.get(id));
     }
 
-    @GetMapping("/{id}/history")
-    @RequirePermission("QUOTATION:VIEW")
-    public ApiResponse<List<AuditLogResponseDto>> history(@PathVariable Long id) {
-        return ApiResponse.ok(service.history(id));
-    }
 
     @PostMapping("/preview")
     @RequirePermission("QUOTATION:CREATE")

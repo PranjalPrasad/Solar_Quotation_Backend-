@@ -1,10 +1,14 @@
 package com.solar.Quotation.dto.requestdto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.validation.constraints.NotBlank;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class LoginRequestDto {
 
-    @NotBlank(message = "Username is required")
+    @NotBlank(message = "Email or username is required")
+    @JsonAlias({"email", "userName", "login"})
     private String username;
 
     @NotBlank(message = "Password is required")

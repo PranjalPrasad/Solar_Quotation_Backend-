@@ -1,9 +1,9 @@
 package com.solar.Quotation.dto.responsedto;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
-/** Full quotation: everything the view modal, the edit modal and the invoice / PDF need. */
 public class QuotationResponseDto {
 
     private Long id;
@@ -135,7 +135,10 @@ public class QuotationResponseDto {
         private BigDecimal referralPercent;
         private BigDecimal referralAmount;
         private String referralStatus;
+        private Long referrerPartnerId;
 
+        public Long getReferrerPartnerId() { return referrerPartnerId; }
+        public void setReferrerPartnerId(Long referrerPartnerId) { this.referrerPartnerId = referrerPartnerId; }
         public boolean isReferred() { return referred; }
         public void setReferred(boolean referred) { this.referred = referred; }
         public String getReferredBy() { return referredBy; }

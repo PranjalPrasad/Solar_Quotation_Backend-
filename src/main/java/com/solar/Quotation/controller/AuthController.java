@@ -1,13 +1,16 @@
 package com.solar.Quotation.controller;
 
 import com.solar.Quotation.dto.requestdto.ChangePasswordRequestDto;
+import com.solar.Quotation.dto.requestdto.ForgotPasswordRequestDto;
 import com.solar.Quotation.dto.requestdto.LoginRequestDto;
 import com.solar.Quotation.dto.requestdto.RefreshTokenRequestDto;
+import com.solar.Quotation.dto.requestdto.ResetPasswordRequestDto;
 import com.solar.Quotation.dto.responsedto.ApiResponse;
 import com.solar.Quotation.dto.responsedto.CurrentUserResponseDto;
 import com.solar.Quotation.dto.responsedto.LoginResponseDto;
 import com.solar.Quotation.dto.responsedto.TokenResponseDto;
 import com.solar.Quotation.service.AuthService;
+import com.solar.Quotation.service.PasswordResetService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,17 +19,18 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * login and refresh are public (see SecurityConfig). forgot-password and reset-password need an e-mail sender
- * and are added with the mail setup.
+ * login, refresh, forgot-password and reset-password are public (see SecurityConfig and JwtAuthFilter).
  */
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
 
     private final AuthService service;
+    private final PasswordResetService passwordResetService;
 
-    public AuthController(AuthService service) {
+    public AuthController(AuthService service, PasswordResetService passwordResetService) {
         this.service = service;
+        this.passwordResetService = passwordResetService;
     }
 
     @PostMapping("/login")
@@ -54,5 +58,19 @@ public class AuthController {
     public ApiResponse<Void> changePassword(@Valid @RequestBody ChangePasswordRequestDto req) {
         service.changePassword(req);
         return ApiResponse.ok(null, "Password changed. Please log in again.");
+    }
+
+    /** Same answer whether or not the account exists, so the endpoint cannot be used to find valid users. */
+    @PostMapping("/forgot-password")
+    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequestDto req) {
+        passwordResetService.requestReset(req);
+        return ApiResponse.ok(null,
+                "If an account exists for that email or username, a password reset link has been sent.");
+    }
+
+    @PostMapping("/reset-password")
+    public ApiResponse<Void> resetPassword(@Valid @RequestBody ResetPasswordRequestDto req) {
+        passwordResetService.resetPassword(req);
+        return ApiResponse.ok(null, "Password reset successful. Please log in with your new password.");
     }
 }

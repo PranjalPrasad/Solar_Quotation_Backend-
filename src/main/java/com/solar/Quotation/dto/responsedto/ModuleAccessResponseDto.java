@@ -2,7 +2,10 @@ package com.solar.Quotation.dto.responsedto;
 
 import java.util.List;
 
-/** One sidebar module the caller may open, with the actions allowed on it. */
+/**
+ * One sidebar module the caller may open, with the actions allowed on it.
+ * code/name/route/actions = backend names. key/label/path = the names session.js and the login page read.
+ */
 public class ModuleAccessResponseDto {
 
     private String code;
@@ -24,4 +27,15 @@ public class ModuleAccessResponseDto {
     public void setRoute(String route) { this.route = route; }
     public List<String> getActions() { return actions; }
     public void setActions(List<String> actions) { this.actions = actions; }
+
+    /** Frontend module key, e.g. QUOTATION -> "quotation", USER -> "user_management". */
+    public String getKey() {
+        if (code == null) return null;
+        String c = code.toLowerCase();
+        return "user".equals(c) ? "user_management" : c;
+    }
+
+    public String getLabel() { return name; }
+
+    public String getPath() { return route; }
 }

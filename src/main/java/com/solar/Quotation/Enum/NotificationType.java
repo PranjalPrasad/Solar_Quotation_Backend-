@@ -1,0 +1,15 @@
+package com.solar.Quotation.Enum;
+
+
+public enum NotificationType {
+    QUOTATION_CREATED,
+    QUOTATION_ACCEPTED,
+    QUOTATION_REJECTED,
+    QUOTATION_EXPIRING,
+    REFERRAL_PENDING,
+    CUSTOMER_CREATED,
+    PROJECT_STATUS_CHANGED,
+    FOLLOWUP_DUE,
+    FOLLOWUP_OVERDUE,
+    SYSTEM
+}

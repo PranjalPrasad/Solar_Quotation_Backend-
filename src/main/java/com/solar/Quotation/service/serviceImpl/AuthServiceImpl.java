@@ -88,7 +88,7 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public LoginResponseDto login(LoginRequestDto req) {
         // One message for unknown user and wrong password, so usernames cannot be probed.
-        AppUser user = userRepository.findByUsernameIgnoreCaseAndDeletedFalse(req.getUsername().trim())
+        AppUser user = userRepository.findByLogin(req.getUsername().trim())
                 .orElseThrow(AuthServiceImpl::invalidCredentials);
         if (!passwordEncoder.matches(req.getPassword(), user.getPasswordHash())) {
             throw invalidCredentials();
@@ -192,7 +192,7 @@ public class AuthServiceImpl implements AuthService {
     // ---------------------------------------------------------------- helpers
 
     private static BusinessException invalidCredentials() {
-        return new BusinessException("INVALID_CREDENTIALS", "Invalid username or password", HttpStatus.UNAUTHORIZED);
+        return new BusinessException("INVALID_CREDENTIALS", "Invalid email or password", HttpStatus.UNAUTHORIZED);
     }
 
     private CurrentUser requireCurrent() {

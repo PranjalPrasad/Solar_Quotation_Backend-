@@ -19,6 +19,13 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
 
     Optional<AppUser> findByUsernameIgnoreCaseAndDeletedFalse(String username);
 
+    Optional<AppUser> findByEmailIgnoreCaseAndDeletedFalse(String email);
+
+    /** Login: the page sends one field that may be the username or the e-mail address. */
+    @Query("select u from AppUser u where u.deleted = false "
+            + "and (lower(u.username) = lower(:login) or lower(u.email) = lower(:login))")
+    Optional<AppUser> findByLogin(@Param("login") String login);
+
     boolean existsByUsernameIgnoreCase(String username);
 
     boolean existsByEmailIgnoreCase(String email);

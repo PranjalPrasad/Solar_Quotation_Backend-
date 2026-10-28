@@ -14,10 +14,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
-/**
- * Create, update and preview. There is NO partnerId: the quotation belongs to the partner of its customer,
- * so Super Admin just picks a customer. There are NO totals either: the server calculates every amount.
- */
 public class QuotationRequestDto {
 
     @NotNull(message = "Customer is required")
@@ -163,6 +159,11 @@ public class QuotationRequestDto {
         @DecimalMax(value = "100", message = "Referral % cannot be more than 100")
         private BigDecimal referralPercent;
 
+        /** Set when the referrer is a channel partner: the server then takes name, code and % from that partner. */
+        private Long referrerPartnerId;
+
+        public Long getReferrerPartnerId() { return referrerPartnerId; }
+        public void setReferrerPartnerId(Long referrerPartnerId) { this.referrerPartnerId = referrerPartnerId; }
         public boolean isReferred() { return referred; }
         public void setReferred(boolean referred) { this.referred = referred; }
         public String getReferredBy() { return referredBy; }

@@ -14,6 +14,12 @@ import jakarta.persistence.UniqueConstraint;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
+/**
+ * A quotation belongs to exactly one channel partner (TenantBaseEntity.channelPartnerId).
+ * All money columns are computed on the server (QuotationCalculator) and stored, so a later change in
+ * GST / subsidy settings never silently changes an old quotation.
+ * Line items live in QuotationItem.
+ */
 @Entity
 @Table(name = "quotation",
         uniqueConstraints = @UniqueConstraint(columnNames = {"channel_partner_id", "code"}),
@@ -124,7 +130,11 @@ public class Quotation extends TenantBaseEntity {
     @Column(name = "referrer_type", length = 30)
     private String referrerType;
 
-    @Column(name = "referral_code", length = 30)
+    /** Set only when referrerType is CHANNEL_PARTNER. This is the link the Referral module pays against. */
+    @Column(name = "referrer_partner_id")
+    private Long referrerPartnerId;
+
+    @Column(name = "referral_code", length = 40)
     private String referralCode;
 
     @Column(name = "referral_percent", precision = 5, scale = 2)
@@ -133,6 +143,7 @@ public class Quotation extends TenantBaseEntity {
     @Column(name = "referral_amount", nullable = false, precision = 14, scale = 2)
     private BigDecimal referralAmount = BigDecimal.ZERO;
 
+    /** Mirror of Referral.status, kept in sync by ReferralServiceImpl. Empty when there is no payable referral. */
     @Enumerated(EnumType.STRING)
     @Column(name = "referral_status", length = 20)
     private ReferralStatus referralStatus;
@@ -230,6 +241,8 @@ public class Quotation extends TenantBaseEntity {
     public void setReferredBy(String referredBy) { this.referredBy = referredBy; }
     public String getReferrerType() { return referrerType; }
     public void setReferrerType(String referrerType) { this.referrerType = referrerType; }
+    public Long getReferrerPartnerId() { return referrerPartnerId; }
+    public void setReferrerPartnerId(Long referrerPartnerId) { this.referrerPartnerId = referrerPartnerId; }
     public String getReferralCode() { return referralCode; }
     public void setReferralCode(String referralCode) { this.referralCode = referralCode; }
     public BigDecimal getReferralPercent() { return referralPercent; }
