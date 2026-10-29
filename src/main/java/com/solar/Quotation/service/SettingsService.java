@@ -43,4 +43,10 @@ public interface SettingsService {
 
     /** For every logged-in role. */
     PublicSettingsResponseDto publicSettings();
+
+    /**
+     * Gives a newly created partner its OWN copy of the platform's current settings, rules and branding as a
+     * starting point. After this, changes on either side never reach the other.
+     */
+    void seedForPartner(Long newPartnerId);
 }

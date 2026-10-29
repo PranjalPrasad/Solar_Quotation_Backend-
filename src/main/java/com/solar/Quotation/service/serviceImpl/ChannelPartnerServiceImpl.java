@@ -24,6 +24,7 @@ import com.solar.Quotation.repository.ChannelPartnerRepository;
 import com.solar.Quotation.repository.RoleRepository;
 import com.solar.Quotation.service.AuditService;
 import com.solar.Quotation.service.ChannelPartnerService;
+import com.solar.Quotation.service.SettingsService;
 import com.solar.Quotation.service.UserService;
 import com.solar.Quotation.util.CodeGenerator;
 import com.solar.Quotation.util.DiffUtil;
@@ -58,6 +59,7 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
     private final UserService userService;
     private final AuditService auditService;
     private final CodeGenerator codeGenerator;
+    private final SettingsService settingsService;
 
     public ChannelPartnerServiceImpl(TenantResolver tenantResolver,
                                      QuotationRepository quotationRepo,
@@ -66,7 +68,8 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
                                      RoleRepository roleRepository,
                                      UserService userService,
                                      AuditService auditService,
-                                     CodeGenerator codeGenerator) {
+                                     CodeGenerator codeGenerator,
+                                     SettingsService settingsService) {
         this.tenantResolver = tenantResolver;
         this.quotationRepo = quotationRepo;
         this.partnerRepository = partnerRepository;
@@ -75,6 +78,7 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
         this.userService = userService;
         this.auditService = auditService;
         this.codeGenerator = codeGenerator;
+        this.settingsService = settingsService;
     }
 
 
@@ -225,6 +229,9 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
         applyFields(p, req);
         p.setStatus(parseStatus(req.getStatus()) == null ? RecordStatus.ACTIVE : parseStatus(req.getStatus()));
         ChannelPartner saved = partnerRepository.save(p);
+
+        // the new partner starts with its own copy of the settings; later changes never cross over
+        settingsService.seedForPartner(saved.getId());
 
         auditService.record(AuditAction.CREATE, "CHANNEL_PARTNER", "ChannelPartner", saved.getId(), saved.getCode(),
                 saved.getId(), DiffUtil.diff(null, snapshot(saved)));

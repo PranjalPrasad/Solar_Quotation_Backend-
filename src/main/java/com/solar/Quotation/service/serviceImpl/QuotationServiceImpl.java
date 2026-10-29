@@ -170,7 +170,7 @@ public class QuotationServiceImpl implements QuotationService {
         q.setQuoteDate(LocalDate.now(IST));
         q.setStatus(QuotationStatus.PENDING);
         List<QuotationItem> items = apply(q, req, customer, false);
-        q.setCode(codeGenerator.next(codePrefix(), partnerId));
+        q.setCode(codeGenerator.next(codePrefix(partnerId), partnerId));
         Quotation saved = quotationRepository.save(q);
 
         saveItems(saved, items);
@@ -260,8 +260,8 @@ public class QuotationServiceImpl implements QuotationService {
                 .orElseThrow(() -> new BusinessException("VALIDATION_ERROR", "Customer not found"));
     }
 
-    private String codePrefix() {
-        String p = settingsProvider.quotationDefaults().getPrefix();
+    private String codePrefix(Long partnerId) {
+        String p = settingsProvider.quotationDefaults(partnerId).getPrefix();
         return (p == null || p.isBlank()) ? "SQ" : p.trim().toUpperCase(Locale.ROOT);
     }
 
@@ -279,7 +279,7 @@ public class QuotationServiceImpl implements QuotationService {
      */
     private List<QuotationItem> apply(Quotation q, QuotationRequestDto req, Customer customer, boolean preview) {
         Long partnerId = q.getChannelPartnerId();
-        QuotationDefaultsResponseDto defaults = settingsProvider.quotationDefaults();
+        QuotationDefaultsResponseDto defaults = settingsProvider.quotationDefaults(partnerId);
 
         // project (optional) must belong to the same customer
         if (req.getProjectId() != null) {
@@ -366,7 +366,7 @@ public class QuotationServiceImpl implements QuotationService {
             category = customer.getType().name();
         }
         BigDecimal subsidy = SubsidyCalculator.calculate(category, q.getSystemSizeKw(), t.total,
-                settingsProvider.activeSubsidyRules());
+                settingsProvider.activeSubsidyRules(q.getChannelPartnerId()));
         q.setSubsidyAmount(subsidy);
         q.setNetInvestment(MoneyUtil.max(BigDecimal.ZERO, t.total.subtract(subsidy)).setScale(2, RoundingMode.HALF_UP));
 
@@ -412,7 +412,7 @@ public class QuotationServiceImpl implements QuotationService {
     }
 
     private void applyBank(Quotation q, QuotationRequestDto req) {
-        BankDetailsResponseDto d = settingsProvider.bank();
+        BankDetailsResponseDto d = settingsProvider.bank(q.getChannelPartnerId());
         QuotationRequestDto.BankRequest b = req.getBank();
         q.setBankAccountName(pick(b == null ? null : b.getAccountName(), d.getAccountName()));
         q.setBankName(pick(b == null ? null : b.getBankName(), d.getBankName()));
@@ -642,7 +642,7 @@ public class QuotationServiceImpl implements QuotationService {
         d.setTariff(q.getTariff());
         d.setEscalationPercent(q.getEscalationPercent());
         d.setSavings(QuotationCalculator.savings(q.getSystemSizeKw(), q.getTariff(), q.getEscalationPercent(),
-                q.getNetInvestment(), settingsProvider.savingsConfig()));
+                q.getNetInvestment(), settingsProvider.savingsConfig(q.getChannelPartnerId())));
 
         d.setTerms(q.getTerms());
         QuotationResponseDto.PaymentTerms pt = new QuotationResponseDto.PaymentTerms();

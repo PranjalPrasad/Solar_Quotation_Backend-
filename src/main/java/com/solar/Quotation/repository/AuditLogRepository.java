@@ -15,6 +15,7 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
 
     @Query("select a from AuditLog a where a.deleted = false "
             + "and (:partnerId is null or a.channelPartnerId = :partnerId) "
+            + "and (:hideAdmin = false or a.actorRole is null or a.actorRole <> 'SUPER_ADMIN') "
             + "and (:userId is null or a.actorUserId = :userId) "
             + "and (:module is null or a.module = :module) "
             + "and (:action is null or a.action = :action) "
@@ -24,6 +25,7 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
             + "and (:search is null or lower(a.entityLabel) like lower(concat('%', :search, '%')) "
             + "     or lower(a.actorName) like lower(concat('%', :search, '%')))")
     Page<AuditLog> search(@Param("partnerId") Long partnerId,
+                          @Param("hideAdmin") boolean hideAdmin,
                           @Param("userId") Long userId,
                           @Param("module") String module,
                           @Param("action") AuditAction action,
@@ -37,9 +39,11 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
     /** Per-record history tab (customer, quotation). Always scoped to one partner for partner roles. */
     @Query("select a from AuditLog a where a.deleted = false "
             + "and (:partnerId is null or a.channelPartnerId = :partnerId) "
+            + "and (:hideAdmin = false or a.actorRole is null or a.actorRole <> 'SUPER_ADMIN') "
             + "and a.entityType = :entityType and a.entityId = :entityId "
             + "order by a.createdAt desc")
     List<AuditLog> findHistory(@Param("partnerId") Long partnerId,
+                               @Param("hideAdmin") boolean hideAdmin,
                                @Param("entityType") String entityType,
                                @Param("entityId") Long entityId,
                                Pageable pageable);

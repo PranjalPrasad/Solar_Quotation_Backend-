@@ -6,8 +6,8 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
 @Entity
-@Table(name = "platform_setting", uniqueConstraints = @UniqueConstraint(columnNames = {"setting_key"}))
-public class PlatformSetting extends BaseEntity {
+@Table(name = "platform_setting", uniqueConstraints = @UniqueConstraint(columnNames = {"channel_partner_id", "setting_key"}))
+public class PlatformSetting extends TenantBaseEntity {
 
     @Column(name = "setting_key", nullable = false, length = 60)
     private String settingKey;

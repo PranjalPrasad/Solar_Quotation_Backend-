@@ -171,7 +171,7 @@ public class SettingsServiceImpl implements SettingsService {
     @Override
     @Transactional(readOnly = true)
     public List<SubsidyRuleResponseDto> subsidyRules() {
-        return subsidyRuleRepository.findByDeletedFalseOrderBySortOrderAscIdAsc().stream()
+        return subsidyRuleRepository.findByChannelPartnerIdAndDeletedFalseOrderBySortOrderAscIdAsc(myPartnerId()).stream()
                 .map(SettingsMapper::toDto).toList();
     }
 
@@ -179,6 +179,7 @@ public class SettingsServiceImpl implements SettingsService {
     @Transactional
     public SubsidyRuleResponseDto createSubsidyRule(SubsidyRuleRequestDto req) {
         SubsidyRule r = new SubsidyRule();
+        r.setChannelPartnerId(myPartnerId());
         applySubsidy(r, req);
         SubsidyRule saved = subsidyRuleRepository.save(r);
         record(AuditAction.CREATE, "SubsidyRule", saved.getId(), saved.getType(), DiffUtil.diff(null, subsidyMap(saved)));
@@ -217,6 +218,7 @@ public class SettingsServiceImpl implements SettingsService {
     @Transactional
     public GstRuleResponseDto createGstRule(GstRuleRequestDto req) {
         GstRule r = new GstRule();
+        r.setChannelPartnerId(myPartnerId());
         applyGst(r, req);
         GstRule saved = gstRuleRepository.save(r);
         record(AuditAction.CREATE, "GstRule", saved.getId(), saved.getCategory(), DiffUtil.diff(null, gstMap(saved)));
@@ -261,9 +263,10 @@ public class SettingsServiceImpl implements SettingsService {
     // ---------------------------------------------------------------- helpers
 
     private PlatformSetting save(String key, Object dto) {
-        PlatformSetting row = settingRepository.findBySettingKeyAndDeletedFalse(key).orElseGet(() -> {
+        PlatformSetting row = settingRepository.findByChannelPartnerIdAndSettingKeyAndDeletedFalse(myPartnerId(), key).orElseGet(() -> {
             PlatformSetting s = new PlatformSetting();
             s.setSettingKey(key);
+            s.setChannelPartnerId(myPartnerId());
             return s;
         });
         row.setValueJson(objectMapper.writeValueAsString(dto));
@@ -274,19 +277,24 @@ public class SettingsServiceImpl implements SettingsService {
         record(AuditAction.UPDATE, "Setting", row.getId(), row.getSettingKey(), DiffUtil.diff(before, after));
     }
 
-    /** Settings belong to the platform, so the audit row is owned by the acting Super Admin's own partner (PLATFORM). */
+    /** Every settings read and write is for the logged-in user's own partner. A partner id in the request is never used. */
+    private Long myPartnerId() {
+        return SettingsProviderImpl.scope(null);
+    }
+
+    /** The audit row is owned by the same partner whose settings changed. */
     private void record(AuditAction action, String entityType, Long id, String label, List<Map<String, String>> changes) {
         CurrentUser u = TenantContext.get();
         auditService.record(action, "SETTINGS", entityType, id, label, u.getPartnerId(), changes);
     }
 
     private SubsidyRule findSubsidy(Long id) {
-        return subsidyRuleRepository.findByIdAndDeletedFalse(id)
+        return subsidyRuleRepository.findByIdAndChannelPartnerIdAndDeletedFalse(id, myPartnerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Subsidy rule not found"));
     }
 
     private GstRule findGst(Long id) {
-        return gstRuleRepository.findByIdAndDeletedFalse(id)
+        return gstRuleRepository.findByIdAndChannelPartnerIdAndDeletedFalse(id, myPartnerId())
                 .orElseThrow(() -> new ResourceNotFoundException("GST rule not found"));
     }
 
@@ -394,5 +402,45 @@ public class SettingsServiceImpl implements SettingsService {
         m.put("gstPercent", plain(r.getGstPercent()));
         m.put("applicableOn", r.getApplicableOn().name());
         return m;
+    }
+
+    // ---------------------------------------------------------------- seeding a new partner
+
+    @Override
+    @Transactional
+    public void seedForPartner(Long newPartnerId) {
+        Long platformId = 1L;
+        if (newPartnerId == null || newPartnerId.equals(platformId)) return;
+
+        for (PlatformSetting src : settingRepository.findByChannelPartnerIdAndDeletedFalse(platformId)) {
+            PlatformSetting c = new PlatformSetting();
+            c.setChannelPartnerId(newPartnerId);
+            c.setSettingKey(src.getSettingKey());
+            c.setValueJson(src.getValueJson());
+            settingRepository.save(c);
+        }
+        for (SubsidyRule src : subsidyRuleRepository
+                .findByChannelPartnerIdAndDeletedFalseOrderBySortOrderAscIdAsc(platformId)) {
+            SubsidyRule c = new SubsidyRule();
+            c.setChannelPartnerId(newPartnerId);
+            c.setType(src.getType());
+            c.setCategory(src.getCategory());
+            c.setValueType(src.getValueType());
+            c.setValue(src.getValue());
+            c.setCapMin(src.getCapMin());
+            c.setCapMax(src.getCapMax());
+            c.setMaxAmount(src.getMaxAmount());
+            c.setActive(src.isActive());
+            c.setSortOrder(src.getSortOrder());
+            subsidyRuleRepository.save(c);
+        }
+        for (GstRule src : gstRuleRepository.findByChannelPartnerIdAndDeletedFalseOrderByIdAsc(platformId)) {
+            GstRule c = new GstRule();
+            c.setChannelPartnerId(newPartnerId);
+            c.setCategory(src.getCategory());
+            c.setGstPercent(src.getGstPercent());
+            c.setApplicableOn(src.getApplicableOn());
+            gstRuleRepository.save(c);
+        }
     }
 }

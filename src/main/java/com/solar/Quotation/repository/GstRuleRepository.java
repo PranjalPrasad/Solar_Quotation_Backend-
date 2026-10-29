@@ -8,7 +8,8 @@ import java.util.Optional;
 
 public interface GstRuleRepository extends JpaRepository<GstRule, Long> {
 
-    List<GstRule> findByDeletedFalseOrderByIdAsc();
+    List<GstRule> findByChannelPartnerIdAndDeletedFalseOrderByIdAsc(Long channelPartnerId);
 
-    Optional<GstRule> findByIdAndDeletedFalse(Long id);
+    /** The partner id is part of the lookup, so a rule of another partner is simply "not found". */
+    Optional<GstRule> findByIdAndChannelPartnerIdAndDeletedFalse(Long id, Long channelPartnerId);
 }

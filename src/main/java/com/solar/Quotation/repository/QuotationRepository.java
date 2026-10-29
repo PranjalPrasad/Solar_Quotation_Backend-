@@ -24,7 +24,19 @@ public interface QuotationRepository extends JpaRepository<Quotation, Long> {
                                 @Param("partnerId") Long partnerId,
                                 @Param("ownerId") Long ownerId);
 
-    @Query("select q from Quotation q where q.deleted = false " /* ... unchanged ... */)
+    @Query("select q from Quotation q where q.deleted = false "
+            + "and (:partnerId is null or q.channelPartnerId = :partnerId) "
+            + "and (:ownerId is null or q.createdBy = :ownerId) "
+            + "and (:status is null or q.status = :status) "
+            + "and (:customerId is null or q.customerId = :customerId) "
+            + "and (:referred is null or q.referred = :referred) "
+            + "and (:fromDate is null or q.quoteDate >= :fromDate) "
+            + "and (:toDate is null or q.quoteDate <= :toDate) "
+            + "and (:search is null or lower(q.code) like lower(concat('%', :search, '%')) "
+            + "     or q.customerId in (select c.id from Customer c where c.deleted = false "
+            + "                         and (:partnerId is null or c.channelPartnerId = :partnerId) "
+            + "                         and (lower(c.name) like lower(concat('%', :search, '%')) "
+            + "                              or c.mobile like concat('%', :search, '%'))))")
     Page<Quotation> search(@Param("partnerId") Long partnerId,
                            @Param("ownerId") Long ownerId,
                            @Param("status") QuotationStatus status,

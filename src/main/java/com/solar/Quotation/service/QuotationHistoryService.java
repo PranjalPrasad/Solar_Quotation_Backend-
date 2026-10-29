@@ -96,10 +96,15 @@ public class QuotationHistoryService {
 
     @Transactional(readOnly = true)
     public List<QuotationHistoryDto> list(Long quotationId) {
-        return repo.findByQuotationIdOrderByVersionDesc(quotationId).stream().map(h -> new QuotationHistoryDto(
-                h.getId(), h.getVersion(), h.getAction(), h.getSummary(),
-                new QuotationHistoryDto.ChangedBy(h.getChangedById(), h.getChangedByName(), h.getChangedByRole()),
-                h.getChangedAt(), h.getStatus(), h.getTotalAmount(), parseChanges(h.getChangesJson()))).toList();
+        // Only Super Admin sees changes made by Super Admin; partner users see their own partner's changes only.
+        com.solar.Quotation.security.CurrentUser viewer = com.solar.Quotation.security.TenantContext.get();
+        boolean hideAdmin = viewer == null || !viewer.isSuperAdmin();
+        return repo.findByQuotationIdOrderByVersionDesc(quotationId).stream()
+                .filter(h -> !hideAdmin || !"SUPER_ADMIN".equalsIgnoreCase(h.getChangedByRole()))
+                .map(h -> new QuotationHistoryDto(
+                        h.getId(), h.getVersion(), h.getAction(), h.getSummary(),
+                        new QuotationHistoryDto.ChangedBy(h.getChangedById(), h.getChangedByName(), h.getChangedByRole()),
+                        h.getChangedAt(), h.getStatus(), h.getTotalAmount(), parseChanges(h.getChangesJson()))).toList();
     }
 
     // ------------------------------------------------------------------ diff
@@ -199,12 +204,10 @@ public class QuotationHistoryService {
      * user object (with an id and display name), read those from it here instead.
      */
     private Actor currentActor() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated() || "anonymousUser".equals(auth.getPrincipal())) {
-            return new Actor(null, "System", null);
-        }
-        String role = auth.getAuthorities().stream().map(GrantedAuthority::getAuthority)
-                .filter(a -> a.startsWith("ROLE_")).map(a -> a.substring(5)).findFirst().orElse(null);
-        return new Actor(null, auth.getName(), role);
+        // The login filter puts a CurrentUser in TenantContext (the Spring authorities list is empty),
+        // so read id, name and role code from there.
+        com.solar.Quotation.security.CurrentUser u = com.solar.Quotation.security.TenantContext.get();
+        if (u == null) return new Actor(null, "System", null);
+        return new Actor(u.getUserId(), u.getName(), u.getRoleCode());
     }
 }

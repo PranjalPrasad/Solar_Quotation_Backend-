@@ -7,6 +7,10 @@ import com.solar.Quotation.dto.requestdto.ProductFilterRequestDto;
 import com.solar.Quotation.dto.requestdto.ProductRequestDto;
 import com.solar.Quotation.dto.requestdto.ProductStatusRequestDto;
 import com.solar.Quotation.dto.requestdto.StockAdjustRequestDto;
+import com.solar.Quotation.dto.requestdto.StockMovementRequestDto;
+import com.solar.Quotation.dto.responsedto.StockMovementResponseDto;
+import com.solar.Quotation.entity.ProductStockMovement;
+import com.solar.Quotation.repository.ProductStockMovementRepository;
 import com.solar.Quotation.dto.responsedto.PageResponse;
 import com.solar.Quotation.dto.responsedto.PartnerRefResponseDto;
 import com.solar.Quotation.dto.responsedto.ProductCatalogItemResponseDto;
@@ -59,10 +63,12 @@ public class ProductServiceImpl implements ProductService {
     private final AuditService auditService;
     private final CodeGenerator codeGenerator;
     private final PartnerGuard partnerGuard;
+    private final ProductStockMovementRepository movementRepository;
 
     public ProductServiceImpl(ProductRepository productRepository, TenantResolver tenantResolver,
                               PartnerRefProvider partnerRefProvider, AuditInfoMapper auditInfoMapper,
-                              AuditService auditService, CodeGenerator codeGenerator, PartnerGuard partnerGuard) {
+                              AuditService auditService, CodeGenerator codeGenerator, PartnerGuard partnerGuard,
+                              ProductStockMovementRepository movementRepository) {
         this.productRepository = productRepository;
         this.tenantResolver = tenantResolver;
         this.partnerRefProvider = partnerRefProvider;
@@ -70,6 +76,7 @@ public class ProductServiceImpl implements ProductService {
         this.auditService = auditService;
         this.codeGenerator = codeGenerator;
         this.partnerGuard = partnerGuard;
+        this.movementRepository = movementRepository;
     }
 
     // ---------------------------------------------------------------- read
@@ -191,6 +198,7 @@ public class ProductServiceImpl implements ProductService {
         before.put("stock", String.valueOf(p.getStock()));
         p.setStock((int) newStock);
         Product saved = productRepository.save(p);
+        recordMovement(saved, req.getAdjustment(), req.getReason().trim());
 
         Map<String, Object> after = new LinkedHashMap<>();
         after.put("stock", String.valueOf(saved.getStock()));
@@ -204,6 +212,52 @@ public class ProductServiceImpl implements ProductService {
         auditService.record(AuditAction.UPDATE, "PRODUCT", "Product", saved.getId(), saved.getCode(),
                 saved.getChannelPartnerId(), changes);
         return toSingleResponse(saved);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<StockMovementResponseDto> stockHistory(Long id) {
+        Product p = findProduct(id);
+        return movementRepository.findTop200ByProductIdAndDeletedFalseOrderByCreatedAtDescIdDesc(p.getId())
+                .stream().map(this::toMovement).toList();
+    }
+
+    @Override
+    @Transactional
+    public List<StockMovementResponseDto> addStockMovement(Long id, StockMovementRequestDto req) {
+        int qty = req.getQuantity();
+        boolean out = "OUT".equals(req.getType());
+        String reason = blankToNull(req.getReason());
+        if (reason == null) {
+            reason = out ? "Stock removed" : "Stock added";
+        }
+        StockAdjustRequestDto adj = new StockAdjustRequestDto();
+        adj.setAdjustment(out ? -qty : qty);
+        adj.setReason(reason);
+        adjustStock(id, adj);                       // validates stock >= 0, updates product, writes ledger + audit
+        return stockHistory(id);
+    }
+
+    private void recordMovement(Product p, int signedQty, String reason) {
+        ProductStockMovement m = new ProductStockMovement();
+        m.setChannelPartnerId(p.getChannelPartnerId());
+        m.setProductId(p.getId());
+        m.setType(signedQty < 0 ? "OUT" : "IN");
+        m.setQuantity(Math.abs(signedQty));
+        m.setReason(reason);
+        m.setBalanceAfter(p.getStock());
+        movementRepository.save(m);
+    }
+
+    private StockMovementResponseDto toMovement(ProductStockMovement m) {
+        StockMovementResponseDto d = new StockMovementResponseDto();
+        d.setId(m.getId());
+        d.setType(m.getType());
+        d.setQuantity(m.getQuantity());
+        d.setReason(m.getReason());
+        d.setBalanceAfter(m.getBalanceAfter());
+        d.setCreatedAt(m.getCreatedAt());
+        return d;
     }
 
     @Override

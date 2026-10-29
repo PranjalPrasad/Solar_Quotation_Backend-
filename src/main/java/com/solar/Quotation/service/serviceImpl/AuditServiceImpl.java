@@ -130,13 +130,19 @@ public class AuditServiceImpl implements AuditService {
     public List<AuditLogResponseDto> entityHistory(String entityType, Long entityId) {
         Long partnerId = tenantResolver.effectivePartnerId(null);
         boolean full = TenantContext.get().isSuperAdmin();
-        List<AuditLog> rows = repository.findHistory(partnerId, entityType, entityId, PageRequest.of(0, 200));
+        List<AuditLog> rows = repository.findHistory(partnerId, hideAdminActions(), entityType, entityId, PageRequest.of(0, 200));
         Map<Long, PartnerRefResponseDto> partners = partnerRefProvider.refs(
                 new HashSet<>(rows.stream().map(AuditLog::getChannelPartnerId).toList()));
         return rows.stream().map(a -> toResponse(a, full, partners)).toList();
     }
 
     // ---------------- helpers ----------------
+
+    /** Only Super Admin may see what Super Admin did. Partner users never see those rows. */
+    private boolean hideAdminActions() {
+        CurrentUser u = TenantContext.get();
+        return u == null || !u.isSuperAdmin();
+    }
 
     private Page<AuditLog> runSearch(AuditFilterRequestDto f, Long partnerId, Pageable pageable) {
         AuditAction action = null;
@@ -151,7 +157,7 @@ public class AuditServiceImpl implements AuditService {
         LocalDateTime to = f.getTo() == null ? MAX_TS : f.getTo().plusDays(1).atStartOfDay();
         String module = blankToNull(f.getModule());
         String entityType = blankToNull(f.getEntityType());
-        return repository.search(partnerId, f.getUserId(), module == null ? null : module.toUpperCase(),
+        return repository.search(partnerId, hideAdminActions(), f.getUserId(), module == null ? null : module.toUpperCase(),
                 action, entityType, f.getEntityId(), from, to, f.getSearchOrNull(), pageable);
     }
 

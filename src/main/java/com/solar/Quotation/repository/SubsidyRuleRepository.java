@@ -1,6 +1,5 @@
 package com.solar.Quotation.repository;
 
-
 import com.solar.Quotation.entity.SubsidyRule;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -9,9 +8,9 @@ import java.util.Optional;
 
 public interface SubsidyRuleRepository extends JpaRepository<SubsidyRule, Long> {
 
-    List<SubsidyRule> findByDeletedFalseOrderBySortOrderAscIdAsc();
+    List<SubsidyRule> findByChannelPartnerIdAndDeletedFalseOrderBySortOrderAscIdAsc(Long channelPartnerId);
 
-    List<SubsidyRule> findByDeletedFalseAndActiveTrueOrderBySortOrderAscIdAsc();
+    List<SubsidyRule> findByChannelPartnerIdAndDeletedFalseAndActiveTrueOrderBySortOrderAscIdAsc(Long channelPartnerId);
 
-    Optional<SubsidyRule> findByIdAndDeletedFalse(Long id);
+    Optional<SubsidyRule> findByIdAndChannelPartnerIdAndDeletedFalse(Long id, Long channelPartnerId);
 }

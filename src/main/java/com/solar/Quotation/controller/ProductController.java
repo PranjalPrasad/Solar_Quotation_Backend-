@@ -4,6 +4,8 @@ import com.solar.Quotation.dto.requestdto.ProductFilterRequestDto;
 import com.solar.Quotation.dto.requestdto.ProductRequestDto;
 import com.solar.Quotation.dto.requestdto.ProductStatusRequestDto;
 import com.solar.Quotation.dto.requestdto.StockAdjustRequestDto;
+import com.solar.Quotation.dto.requestdto.StockMovementRequestDto;
+import com.solar.Quotation.dto.responsedto.StockMovementResponseDto;
 import com.solar.Quotation.dto.responsedto.ApiResponse;
 import com.solar.Quotation.dto.responsedto.PageResponse;
 import com.solar.Quotation.dto.responsedto.ProductCatalogItemResponseDto;
@@ -86,6 +88,19 @@ public class ProductController {
     public ApiResponse<ProductResponseDto> adjustStock(@PathVariable Long id,
                                                        @Valid @RequestBody StockAdjustRequestDto req) {
         return ApiResponse.ok(service.adjustStock(id, req), "Stock updated");
+    }
+
+    @GetMapping("/{id}/stock-history")
+    @RequirePermission("PRODUCT:VIEW")
+    public ApiResponse<List<StockMovementResponseDto>> stockHistory(@PathVariable Long id) {
+        return ApiResponse.ok(service.stockHistory(id));
+    }
+
+    @PostMapping("/{id}/stock-history")
+    @RequirePermission("PRODUCT:EDIT")
+    public ApiResponse<List<StockMovementResponseDto>> addStockMovement(@PathVariable Long id,
+                                                                        @Valid @RequestBody StockMovementRequestDto req) {
+        return ApiResponse.ok(service.addStockMovement(id, req), "Stock updated");
     }
 
     @DeleteMapping("/{id}")

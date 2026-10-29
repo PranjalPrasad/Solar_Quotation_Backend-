@@ -12,7 +12,7 @@ import java.math.BigDecimal;
 /** One subsidy rule of a consumer category. The subsidy of a quotation is the sum of all matching active rules. */
 @Entity
 @Table(name = "subsidy_rule")
-public class SubsidyRule extends BaseEntity {
+public class SubsidyRule extends TenantBaseEntity {
 
     /** Display name, for example "PM Surya Ghar CFA: first 2 kW". */
     @Column(name = "subsidy_type", nullable = false, length = 150)

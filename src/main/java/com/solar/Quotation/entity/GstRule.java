@@ -11,7 +11,7 @@ import java.math.BigDecimal;
 
 @Entity
 @Table(name = "gst_rule")
-public class GstRule extends BaseEntity {
+public class GstRule extends TenantBaseEntity {
 
     @Column(nullable = false, length = 100)
     private String category;

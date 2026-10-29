@@ -9,6 +9,8 @@ import com.solar.Quotation.dto.responsedto.SubsidyRuleResponseDto;
 import com.solar.Quotation.repository.GstRuleRepository;
 import com.solar.Quotation.repository.PlatformSettingRepository;
 import com.solar.Quotation.repository.SubsidyRuleRepository;
+import com.solar.Quotation.security.CurrentUser;
+import com.solar.Quotation.security.TenantContext;
 import com.solar.Quotation.service.SettingsProvider;
 import com.solar.Quotation.util.SettingsDefaults;
 import com.solar.Quotation.util.SettingsMapper;
@@ -22,12 +24,15 @@ import java.util.List;
 import java.util.function.Supplier;
 
 /**
- * Reads the settings. A group that was never saved (or whose stored JSON cannot be read) falls back to the
+ * Reads the settings of ONE partner (never another partner's, and never a shared platform copy). A group that was never saved (or whose stored JSON cannot be read) falls back to the
  * built-in defaults, so the quotation and calculator screens never break because of a missing setting.
  * Small tables, read per request. Add a short cache here only if profiling asks for it.
  */
 @Component
 public class SettingsProviderImpl implements SettingsProvider {
+
+    /** The built-in PLATFORM tenant (data.sql). Used only when no user is logged in. */
+    private static final Long PLATFORM_PARTNER_ID = 1L;
 
     public static final String KEY_BRANDING = "BRANDING";
     public static final String KEY_BANK = "BANK";
@@ -49,45 +54,65 @@ public class SettingsProviderImpl implements SettingsProvider {
         this.objectMapper = objectMapper;
     }
 
+    // ---- own partner (logged-in user) ----
+
+    @Override public BrandingResponseDto branding() { return branding(null); }
+    @Override public BankDetailsResponseDto bank() { return bank(null); }
+    @Override public QuotationDefaultsResponseDto quotationDefaults() { return quotationDefaults(null); }
+    @Override public SavingsConfigResponseDto savingsConfig() { return savingsConfig(null); }
+    @Override public List<SubsidyRuleResponseDto> activeSubsidyRules() { return activeSubsidyRules(null); }
+    @Override public List<GstRuleResponseDto> gstRules() { return gstRules(null); }
+
+    // ---- explicit partner ----
+
     @Override
     @Transactional(readOnly = true)
-    public BrandingResponseDto branding() {
-        return read(KEY_BRANDING, BrandingResponseDto.class, SettingsDefaults::branding);
+    public BrandingResponseDto branding(Long partnerId) {
+        return read(partnerId, KEY_BRANDING, BrandingResponseDto.class, SettingsDefaults::branding);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public BankDetailsResponseDto bank() {
-        return read(KEY_BANK, BankDetailsResponseDto.class, SettingsDefaults::bank);
+    public BankDetailsResponseDto bank(Long partnerId) {
+        return read(partnerId, KEY_BANK, BankDetailsResponseDto.class, SettingsDefaults::bank);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public QuotationDefaultsResponseDto quotationDefaults() {
-        return read(KEY_QUOTATION_DEFAULTS, QuotationDefaultsResponseDto.class, SettingsDefaults::quotationDefaults);
+    public QuotationDefaultsResponseDto quotationDefaults(Long partnerId) {
+        return read(partnerId, KEY_QUOTATION_DEFAULTS, QuotationDefaultsResponseDto.class, SettingsDefaults::quotationDefaults);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public SavingsConfigResponseDto savingsConfig() {
-        return read(KEY_SAVINGS_CONFIG, SavingsConfigResponseDto.class, SettingsDefaults::savingsConfig);
+    public SavingsConfigResponseDto savingsConfig(Long partnerId) {
+        return read(partnerId, KEY_SAVINGS_CONFIG, SavingsConfigResponseDto.class, SettingsDefaults::savingsConfig);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public List<SubsidyRuleResponseDto> activeSubsidyRules() {
-        return subsidyRuleRepository.findByDeletedFalseAndActiveTrueOrderBySortOrderAscIdAsc().stream()
+    public List<SubsidyRuleResponseDto> activeSubsidyRules(Long partnerId) {
+        return subsidyRuleRepository
+                .findByChannelPartnerIdAndDeletedFalseAndActiveTrueOrderBySortOrderAscIdAsc(scope(partnerId)).stream()
                 .map(SettingsMapper::toDto).toList();
     }
 
     @Override
     @Transactional(readOnly = true)
-    public List<GstRuleResponseDto> gstRules() {
-        return gstRuleRepository.findByDeletedFalseOrderByIdAsc().stream().map(SettingsMapper::toDto).toList();
+    public List<GstRuleResponseDto> gstRules(Long partnerId) {
+        return gstRuleRepository.findByChannelPartnerIdAndDeletedFalseOrderByIdAsc(scope(partnerId)).stream()
+                .map(SettingsMapper::toDto).toList();
     }
 
-    private <T> T read(String key, Class<T> type, Supplier<T> defaults) {
-        return settingRepository.findBySettingKeyAndDeletedFalse(key).map(row -> {
+    /** Which partner's settings to use: the one asked for, else the logged-in user's, else PLATFORM. */
+    public static Long scope(Long partnerId) {
+        if (partnerId != null) return partnerId;
+        CurrentUser u = TenantContext.get();
+        return (u != null && u.getPartnerId() != null) ? u.getPartnerId() : PLATFORM_PARTNER_ID;
+    }
+
+    private <T> T read(Long partnerId, String key, Class<T> type, Supplier<T> defaults) {
+        return settingRepository.findByChannelPartnerIdAndSettingKeyAndDeletedFalse(scope(partnerId), key).map(row -> {
             try {
                 return objectMapper.readValue(row.getValueJson(), type);
             } catch (RuntimeException e) {

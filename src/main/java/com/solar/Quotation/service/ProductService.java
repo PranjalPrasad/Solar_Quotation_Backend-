@@ -4,6 +4,8 @@ import com.solar.Quotation.dto.requestdto.ProductFilterRequestDto;
 import com.solar.Quotation.dto.requestdto.ProductRequestDto;
 import com.solar.Quotation.dto.requestdto.ProductStatusRequestDto;
 import com.solar.Quotation.dto.requestdto.StockAdjustRequestDto;
+import com.solar.Quotation.dto.requestdto.StockMovementRequestDto;
+import com.solar.Quotation.dto.responsedto.StockMovementResponseDto;
 import com.solar.Quotation.dto.responsedto.PageResponse;
 import com.solar.Quotation.dto.responsedto.ProductCatalogItemResponseDto;
 import com.solar.Quotation.dto.responsedto.ProductResponseDto;
@@ -30,6 +32,12 @@ public interface ProductService {
     ProductResponseDto updateStatus(Long id, ProductStatusRequestDto req);
 
     ProductResponseDto adjustStock(Long id, StockAdjustRequestDto req);
+
+    /** Stock ledger of one product, newest first. */
+    List<StockMovementResponseDto> stockHistory(Long id);
+
+    /** Records a stock IN / OUT line and updates the product stock. */
+    List<StockMovementResponseDto> addStockMovement(Long id, StockMovementRequestDto req);
 
     void delete(Long id);
 }
