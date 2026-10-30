@@ -3,9 +3,12 @@ package com.solar.Quotation.service;
 import com.solar.Quotation.dto.requestdto.ProjectFilterRequestDto;
 import com.solar.Quotation.dto.requestdto.ProjectRequestDto;
 import com.solar.Quotation.dto.requestdto.ProjectStatusRequestDto;
+import com.solar.Quotation.dto.responsedto.AuditLogResponseDto;
 import com.solar.Quotation.dto.responsedto.PageResponse;
 import com.solar.Quotation.dto.responsedto.ProjectResponseDto;
 import com.solar.Quotation.dto.responsedto.ProjectSummaryResponseDto;
+
+import java.util.List;
 
 public interface ProjectService {
 
@@ -23,4 +26,7 @@ public interface ProjectService {
     ProjectResponseDto updateStatus(Long id, ProjectStatusRequestDto req);
 
     void delete(Long id);
+
+    /** Change history of one project plus the history of its linked quotation(s) (approval trail), newest first. */
+    List<AuditLogResponseDto> history(Long id);
 }

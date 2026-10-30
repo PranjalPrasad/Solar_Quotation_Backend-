@@ -4,12 +4,14 @@ import com.solar.Quotation.dto.requestdto.ProjectFilterRequestDto;
 import com.solar.Quotation.dto.requestdto.ProjectRequestDto;
 import com.solar.Quotation.dto.requestdto.ProjectStatusRequestDto;
 import com.solar.Quotation.dto.responsedto.ApiResponse;
+import com.solar.Quotation.dto.responsedto.AuditLogResponseDto;
 import com.solar.Quotation.dto.responsedto.PageResponse;
 import com.solar.Quotation.dto.responsedto.ProjectResponseDto;
 import com.solar.Quotation.dto.responsedto.ProjectSummaryResponseDto;
 import com.solar.Quotation.security.RequirePermission;
 import com.solar.Quotation.service.ProjectService;
 import jakarta.validation.Valid;
+import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -55,6 +57,12 @@ public class ProjectController {
     @RequirePermission("PROJECT:CREATE")
     public ResponseEntity<ApiResponse<ProjectResponseDto>> create(@Valid @RequestBody ProjectRequestDto req) {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(service.create(req), "Project created"));
+    }
+
+    @GetMapping("/{id}/history")
+    @RequirePermission("PROJECT:VIEW")
+    public ApiResponse<List<AuditLogResponseDto>> history(@PathVariable Long id) {
+        return ApiResponse.ok(service.history(id));
     }
 
     @PutMapping("/{id}")

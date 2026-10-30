@@ -237,4 +237,8 @@ public interface QuotationRepository extends JpaRepository<Quotation, Long> {
     Page<Object[]> referralActivity(@Param("partnerId") Long partnerId,
                                     @Param("status") com.solar.Quotation.Enum.QuotationStatus status,
                                     Pageable pageable);
+
+    /** Quotations attached to the given projects, newest first (used by the Project module to show the linked quotation). */
+    @Query("select q from Quotation q where q.deleted = false and q.projectId in :projectIds order by q.createdAt desc")
+    java.util.List<Quotation> findLinkedToProjects(@Param("projectIds") java.util.Collection<Long> projectIds);
 }

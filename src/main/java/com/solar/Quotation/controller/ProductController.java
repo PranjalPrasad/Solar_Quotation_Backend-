@@ -47,7 +47,7 @@ public class ProductController {
 
     /** Active products for the quotation product picker. Super Admin passes ?partnerId= to pick a partner. */
     @GetMapping("/catalog")
-    @RequirePermission("PRODUCT:VIEW")
+    @RequirePermission("PRODUCT:VIEW|QUOTATION:CREATE|QUOTATION:EDIT|QUOTATION:VIEW")
     public ApiResponse<List<ProductCatalogItemResponseDto>> catalog(@RequestParam(required = false) Long partnerId) {
         return ApiResponse.ok(service.catalog(partnerId));
     }

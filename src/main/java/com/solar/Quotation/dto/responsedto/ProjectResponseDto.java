@@ -20,6 +20,9 @@ public class ProjectResponseDto {
     private String remarks;
     private PartnerRefResponseDto partner;
     private AuditInfoResponseDto audit;
+    private Long quotationId;
+    private String quotationCode;
+    private String quotationStatus;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -53,4 +56,10 @@ public class ProjectResponseDto {
     public void setPartner(PartnerRefResponseDto partner) { this.partner = partner; }
     public AuditInfoResponseDto getAudit() { return audit; }
     public void setAudit(AuditInfoResponseDto audit) { this.audit = audit; }
+    public Long getQuotationId() { return quotationId; }
+    public void setQuotationId(Long quotationId) { this.quotationId = quotationId; }
+    public String getQuotationCode() { return quotationCode; }
+    public void setQuotationCode(String quotationCode) { this.quotationCode = quotationCode; }
+    public String getQuotationStatus() { return quotationStatus; }
+    public void setQuotationStatus(String quotationStatus) { this.quotationStatus = quotationStatus; }
 }

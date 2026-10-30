@@ -74,8 +74,11 @@ SELECT 'ROLE', 'Roles & Permissions', NULL, 0, 12, 0, 0, UTC_TIMESTAMP()
 WHERE NOT EXISTS (SELECT 1 FROM module WHERE code = 'ROLE');
 
 INSERT INTO module (code, name, route, platform_only, sort_order, deleted, version, created_at)
-SELECT 'AUDIT', 'Audit Log', NULL, 1, 13, 0, 0, UTC_TIMESTAMP()
+SELECT 'AUDIT', 'Audit Log', '/audit/audit.html', 1, 13, 0, 0, UTC_TIMESTAMP()
 WHERE NOT EXISTS (SELECT 1 FROM module WHERE code = 'AUDIT');
+
+-- existing databases: the row above was seeded earlier with no route, so the sidebar link never appeared
+UPDATE module SET route = '/audit/audit.html' WHERE code = 'AUDIT' AND route IS NULL;
 
 INSERT INTO permission (module_id, action, code, deleted, version, created_at)
 SELECT m.id, 'VIEW', 'DASHBOARD:VIEW', 0, 0, UTC_TIMESTAMP() FROM module m
@@ -184,6 +187,18 @@ WHERE m.code = 'USER' AND NOT EXISTS (SELECT 1 FROM permission WHERE code = 'USE
 INSERT INTO permission (module_id, action, code, deleted, version, created_at)
 SELECT m.id, 'VIEW', 'CALCULATOR:VIEW', 0, 0, UTC_TIMESTAMP() FROM module m
 WHERE m.code = 'CALCULATOR' AND NOT EXISTS (SELECT 1 FROM permission WHERE code = 'CALCULATOR:VIEW');
+
+INSERT INTO permission (module_id, action, code, deleted, version, created_at)
+SELECT m.id, 'CREATE', 'CALCULATOR:CREATE', 0, 0, UTC_TIMESTAMP() FROM module m
+WHERE m.code = 'CALCULATOR' AND NOT EXISTS (SELECT 1 FROM permission WHERE code = 'CALCULATOR:CREATE');
+
+INSERT INTO permission (module_id, action, code, deleted, version, created_at)
+SELECT m.id, 'EDIT', 'CALCULATOR:EDIT', 0, 0, UTC_TIMESTAMP() FROM module m
+WHERE m.code = 'CALCULATOR' AND NOT EXISTS (SELECT 1 FROM permission WHERE code = 'CALCULATOR:EDIT');
+
+INSERT INTO permission (module_id, action, code, deleted, version, created_at)
+SELECT m.id, 'DELETE', 'CALCULATOR:DELETE', 0, 0, UTC_TIMESTAMP() FROM module m
+WHERE m.code = 'CALCULATOR' AND NOT EXISTS (SELECT 1 FROM permission WHERE code = 'CALCULATOR:DELETE');
 
 INSERT INTO permission (module_id, action, code, deleted, version, created_at)
 SELECT m.id, 'VIEW', 'APPROVAL:VIEW', 0, 0, UTC_TIMESTAMP() FROM module m

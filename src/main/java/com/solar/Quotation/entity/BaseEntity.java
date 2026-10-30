@@ -36,7 +36,7 @@ public abstract class BaseEntity {
     void onCreate() {
         createdAt = LocalDateTime.now(ZoneOffset.UTC);
         CurrentUser u = TenantContext.get();
-        if (u != null) createdBy = u.getUserId();
+        if (u != null && createdBy == null) createdBy = u.getUserId();
     }
 
     @PreUpdate

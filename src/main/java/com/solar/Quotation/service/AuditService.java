@@ -28,4 +28,7 @@ public interface AuditService {
 
     /** Per-record history. Partner users get only action, time and actor name. */
     List<AuditLogResponseDto> entityHistory(String entityType, Long entityId);
+
+    /** Values for the Audit Log filter dropdowns, taken from the database and the AuditAction enum. Keys: modules, actions. */
+    Map<String, List<String>> filterOptions();
 }

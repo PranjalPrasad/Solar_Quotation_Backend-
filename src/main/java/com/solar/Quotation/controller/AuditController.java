@@ -30,6 +30,13 @@ public class AuditController {
         return ApiResponse.ok(service.search(filter));
     }
 
+    /** Dropdown values for the screen's filters, so the page has no hard-coded lists. */
+    @GetMapping("/filters")
+    @RequirePermission("AUDIT:VIEW")
+    public ApiResponse<java.util.Map<String, java.util.List<String>>> filters() {
+        return ApiResponse.ok(service.filterOptions());
+    }
+
     @GetMapping("/export")
     @RequirePermission("AUDIT:EXPORT")
     public ResponseEntity<byte[]> export(AuditFilterRequestDto filter) {

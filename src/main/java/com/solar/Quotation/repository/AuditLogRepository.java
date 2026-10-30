@@ -47,4 +47,8 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
                                @Param("entityType") String entityType,
                                @Param("entityId") Long entityId,
                                Pageable pageable);
+
+    /** Modules that actually appear in the audit log (feeds the module filter on the Audit Log screen). */
+    @Query("select distinct a.module from AuditLog a where a.deleted = false order by a.module")
+    List<String> distinctModules();
 }

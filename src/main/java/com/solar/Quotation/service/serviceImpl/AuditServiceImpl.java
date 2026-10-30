@@ -136,6 +136,15 @@ public class AuditServiceImpl implements AuditService {
         return rows.stream().map(a -> toResponse(a, full, partners)).toList();
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Map<String, List<String>> filterOptions() {
+        Map<String, List<String>> out = new java.util.LinkedHashMap<>();
+        out.put("modules", repository.distinctModules());
+        out.put("actions", java.util.Arrays.stream(AuditAction.values()).map(Enum::name).toList());
+        return out;
+    }
+
     // ---------------- helpers ----------------
 
     /** Only Super Admin may see what Super Admin did. Partner users never see those rows. */

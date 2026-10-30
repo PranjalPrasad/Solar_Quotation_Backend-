@@ -6,6 +6,7 @@ import com.solar.Quotation.Enum.ProjectStatus;
 import com.solar.Quotation.dto.requestdto.ProjectFilterRequestDto;
 import com.solar.Quotation.dto.requestdto.ProjectRequestDto;
 import com.solar.Quotation.dto.requestdto.ProjectStatusRequestDto;
+import com.solar.Quotation.dto.responsedto.AuditLogResponseDto;
 import com.solar.Quotation.dto.responsedto.CustomerRefResponseDto;
 import com.solar.Quotation.dto.responsedto.PageResponse;
 import com.solar.Quotation.dto.responsedto.PartnerRefResponseDto;
@@ -13,10 +14,12 @@ import com.solar.Quotation.dto.responsedto.ProjectResponseDto;
 import com.solar.Quotation.dto.responsedto.ProjectSummaryResponseDto;
 import com.solar.Quotation.entity.Customer;
 import com.solar.Quotation.entity.Project;
+import com.solar.Quotation.entity.Quotation;
 import com.solar.Quotation.exception.BusinessException;
 import com.solar.Quotation.exception.ResourceNotFoundException;
 import com.solar.Quotation.repository.CustomerRepository;
 import com.solar.Quotation.repository.ProjectRepository;
+import com.solar.Quotation.repository.QuotationRepository;
 import com.solar.Quotation.security.TenantResolver;
 import com.solar.Quotation.service.AuditService;
 import com.solar.Quotation.service.PartnerRefProvider;
@@ -56,10 +59,12 @@ public class ProjectServiceImpl implements ProjectService {
     private final AuditInfoMapper auditInfoMapper;
     private final AuditService auditService;
     private final CodeGenerator codeGenerator;
+    private final QuotationRepository quotationRepository;
 
     public ProjectServiceImpl(ProjectRepository projectRepository, CustomerRepository customerRepository,
                               TenantResolver tenantResolver, PartnerRefProvider partnerRefProvider,
-                              AuditInfoMapper auditInfoMapper, AuditService auditService, CodeGenerator codeGenerator) {
+                              AuditInfoMapper auditInfoMapper, AuditService auditService, CodeGenerator codeGenerator,
+                              QuotationRepository quotationRepository) {
         this.projectRepository = projectRepository;
         this.customerRepository = customerRepository;
         this.tenantResolver = tenantResolver;
@@ -67,6 +72,7 @@ public class ProjectServiceImpl implements ProjectService {
         this.auditInfoMapper = auditInfoMapper;
         this.auditService = auditService;
         this.codeGenerator = codeGenerator;
+        this.quotationRepository = quotationRepository;
     }
 
     // ---------------------------------------------------------------- read
@@ -105,6 +111,19 @@ public class ProjectServiceImpl implements ProjectService {
     @Transactional(readOnly = true)
     public ProjectResponseDto get(Long id) {
         return toSingleResponse(findProject(id));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<AuditLogResponseDto> history(Long id) {
+        Project p = findProject(id);                     // 404 if it is not visible to the caller
+        List<AuditLogResponseDto> rows = new java.util.ArrayList<>(auditService.entityHistory("Project", p.getId()));
+        for (Quotation q : quotationRepository.findLinkedToProjects(List.of(p.getId()))) {
+            rows.addAll(auditService.entityHistory("Quotation", q.getId()));   // approval / status trail of the quotation
+        }
+        rows.sort(java.util.Comparator.comparing(AuditLogResponseDto::getCreatedAt,
+                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
+        return rows;
     }
 
     // ---------------------------------------------------------------- write
@@ -251,6 +270,7 @@ public class ProjectServiceImpl implements ProjectService {
         private Map<Long, PartnerRefResponseDto> partners = new HashMap<>();
         private Map<Long, String> names = new HashMap<>();
         private final Map<Long, CustomerRefResponseDto> customers = new HashMap<>();
+        private final Map<Long, Quotation> quotations = new HashMap<>();   // projectId -> latest linked quotation
     }
 
     private Lookup lookup(List<Project> projects) {
@@ -266,6 +286,10 @@ public class ProjectServiceImpl implements ProjectService {
         }
         lk.partners = partnerRefProvider.refs(partnerIds);
         lk.names = auditInfoMapper.namesFor(projects);
+        List<Long> projectIds = projects.stream().map(Project::getId).toList();
+        for (Quotation q : quotationRepository.findLinkedToProjects(projectIds)) {
+            lk.quotations.putIfAbsent(q.getProjectId(), q);   // list is newest first
+        }
         for (Customer c : customerRepository.findAllById(customerIds)) {
             lk.customers.put(c.getId(), new CustomerRefResponseDto(c.getId(), c.getCode(), c.getName()));
         }
@@ -292,6 +316,12 @@ public class ProjectServiceImpl implements ProjectService {
         d.setInstallationType(p.getInstallationType());
         d.setStatus(p.getStatus().name());
         d.setRemarks(p.getRemarks());
+        Quotation lq = lk.quotations.get(p.getId());
+        if (lq != null) {
+            d.setQuotationId(lq.getId());
+            d.setQuotationCode(lq.getCode());
+            d.setQuotationStatus(lq.getStatus().name());
+        }
         d.setPartner(lk.partners.get(p.getChannelPartnerId()));
         d.setAudit(auditInfoMapper.of(p, lk.names));
         return d;

@@ -2,6 +2,7 @@ package com.solar.Quotation.service.serviceImpl;
 
 import com.solar.Quotation.Enum.AuditAction;
 import com.solar.Quotation.Enum.DiscountType;
+import com.solar.Quotation.Enum.ProjectStatus;
 import com.solar.Quotation.Enum.QuotationStatus;
 import com.solar.Quotation.Enum.ReferralStatus;
 import com.solar.Quotation.dto.requestdto.QuotationFilterRequestDto;
@@ -226,11 +227,50 @@ public class QuotationServiceImpl implements QuotationService {
         if (next == QuotationStatus.ACCEPTED && q.isReferred() && q.getReferralStatus() == null) {
             q.setReferralStatus(ReferralStatus.PENDING);
         }
+        // Approved/accepted quotation without a project yet -> open the project (PLANNING) and link it
+        if ((next == QuotationStatus.ACCEPTED || next == QuotationStatus.APPROVED) && q.getProjectId() == null) {
+            q.setProjectId(createProjectFromQuotation(q).getId());
+        }
         Quotation saved = quotationRepository.save(q);
 
         auditService.record(AuditAction.STATUS_CHANGE, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
                 saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved, items)));
         return toResponse(saved, items);
+    }
+
+    /** Builds the project for an accepted quotation from the quotation + customer data (idempotent: caller checks projectId). */
+    private Project createProjectFromQuotation(Quotation q) {
+        Customer c = customerRepository.findById(q.getCustomerId())
+                .orElseThrow(() -> new BusinessException("VALIDATION_ERROR", "Customer not found"));
+        Long partnerId = q.getChannelPartnerId();
+        BigDecimal kw = q.getSystemSizeKw().setScale(2, RoundingMode.HALF_UP);
+
+        Project p = new Project();
+        p.setChannelPartnerId(partnerId);
+        p.setCode(codeGenerator.next("PRJ", partnerId));
+        p.setCustomerId(c.getId());
+        String name = c.getName() + " - " + kw.stripTrailingZeros().toPlainString() + " kW Solar";
+        p.setName(name.length() > 200 ? name.substring(0, 200) : name);
+        p.setType(c.getType());
+        p.setCapacityKw(kw);
+        String loc = java.util.stream.Stream.of(c.getCity(), c.getState())
+                .filter(x -> x != null && !x.isBlank()).collect(java.util.stream.Collectors.joining(", "));
+        p.setLocation(loc.isEmpty() ? null : loc);
+        p.setEstimatedGeneration(kw.multiply(new BigDecimal("120")).setScale(2, RoundingMode.HALF_UP)); // 4 units/kW/day x 30
+        p.setStatus(ProjectStatus.PLANNING);
+        p.setRemarks("Auto-created from quotation " + q.getCode());
+        p.setCreatedBy(q.getCreatedBy());   // owner stays the quotation's creator, so sales users still see their project
+        Project saved = projectRepository.save(p);
+
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("name", saved.getName());
+        after.put("customerId", c.getId().toString());
+        after.put("capacityKw", kw.toPlainString());
+        after.put("status", saved.getStatus().name());
+        after.put("sourceQuotation", q.getCode());
+        auditService.record(AuditAction.CREATE, "PROJECT", "Project", saved.getId(), saved.getCode(),
+                partnerId, DiffUtil.diff(null, after));
+        return saved;
     }
 
     @Override
