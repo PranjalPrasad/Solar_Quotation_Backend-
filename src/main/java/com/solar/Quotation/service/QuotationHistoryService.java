@@ -37,48 +37,52 @@ public class QuotationHistoryService {
     // ------------------------------------------------------------------ write side
 
     @Transactional
-    public void recordCreated(Long quotationId, String code, Object after) {
-        save(quotationId, code, "CREATED", "Quotation created", after, List.of());
+    public void recordCreated(Long partnerId, Long quotationId, String code, Object after) {
+        save(partnerId, quotationId, code, "CREATED", "Quotation created", after, List.of());
     }
 
     /** Skips the row when nothing actually changed (a save with identical values). */
     @Transactional
-    public void recordUpdated(Long quotationId, String code, Object before, Object after) {
+    public void recordUpdated(Long partnerId, Long quotationId, String code, Object before, Object after) {
         List<QuotationHistoryDto.Change> changes = diff(before, after);
         if (changes.isEmpty()) return;
         String fields = String.join(", ", changes.stream().limit(4).map(c -> c.field()).toList());
         String more = changes.size() > 4 ? " +" + (changes.size() - 4) + " more" : "";
-        save(quotationId, code, "UPDATED", changes.size() + " field(s) changed: " + fields + more, after, changes);
+        save(partnerId, quotationId, code, "UPDATED", changes.size() + " field(s) changed: " + fields + more, after, changes);
     }
 
     @Transactional
-    public void recordStatusChanged(Long quotationId, String code, String oldStatus, String newStatus, Object after) {
+    public void recordStatusChanged(Long partnerId, Long quotationId, String code, String oldStatus, String newStatus, Object after) {
         if (Objects.equals(oldStatus, newStatus)) return;
-        save(quotationId, code, "STATUS_CHANGED", "Status changed from " + oldStatus + " to " + newStatus, after,
+        save(partnerId, quotationId, code, "STATUS_CHANGED", "Status changed from " + oldStatus + " to " + newStatus, after,
                 List.of(new QuotationHistoryDto.Change("status", oldStatus, newStatus)));
     }
 
-    /** Optional: call when a quotation is converted to an order. */
+    /** Call when a quotation is converted (to a project today, to an order later). target e.g. "project PRJ-0001". */
     @Transactional
-    public void recordConverted(Long quotationId, String code, String orderReference, Object after) {
-        save(quotationId, code, "CONVERTED", "Converted to order " + orderReference, after, List.of());
+    public void recordConverted(Long partnerId, Long quotationId, String code, String target, Object after) {
+        save(partnerId, quotationId, code, "CONVERTED", "Converted to " + target, after, List.of());
     }
 
     /** Call BEFORE deleting the quotation. The history rows stay (there is no foreign key). */
     @Transactional
-    public void recordDeleted(Long quotationId, String code, Object before) {
-        save(quotationId, code, "DELETED", "Quotation deleted", before, List.of());
+    public void recordDeleted(Long partnerId, Long quotationId, String code, Object before) {
+        save(partnerId, quotationId, code, "DELETED", "Quotation deleted", before, List.of());
     }
 
-    private void save(Long quotationId, String code, String action, String summary, Object snapshotSource,
+    private void save(Long partnerId, Long quotationId, String code, String action, String summary, Object snapshotSource,
                       List<QuotationHistoryDto.Change> changes) {
+        if (partnerId == null) {
+            throw new IllegalArgumentException("History needs the partner of the quotation");
+        }
         Map<String, Object> snap = toMap(snapshotSource);
         Actor who = currentActor();
 
         QuotationHistory h = new QuotationHistory();
+        h.setChannelPartnerId(partnerId);
         h.setQuotationId(quotationId);
         h.setQuotationCode(code);
-        h.setVersion(repo.maxVersion(quotationId) + 1);
+        h.setVersion(repo.maxVersion(quotationId, partnerId) + 1);
         h.setAction(action);
         h.setSummary(summary);
         h.setStatus(snap.get("status") == null ? null : String.valueOf(snap.get("status")));
@@ -94,12 +98,18 @@ public class QuotationHistoryService {
 
     // ------------------------------------------------------------------ read side
 
+    /**
+     * @param partnerId the partner of a quotation the caller has ALREADY passed the tenant check for
+     *                  (QuotationServiceImpl.history). The query filters by it too, so a quotation id of another
+     *                  partner returns nothing even if a caller forgot the check.
+     */
     @Transactional(readOnly = true)
-    public List<QuotationHistoryDto> list(Long quotationId) {
+    public List<QuotationHistoryDto> list(Long quotationId, Long partnerId) {
+        if (partnerId == null) return List.of();
         // Only Super Admin sees changes made by Super Admin; partner users see their own partner's changes only.
         com.solar.Quotation.security.CurrentUser viewer = com.solar.Quotation.security.TenantContext.get();
         boolean hideAdmin = viewer == null || !viewer.isSuperAdmin();
-        return repo.findByQuotationIdOrderByVersionDesc(quotationId).stream()
+        return repo.findByQuotationIdAndChannelPartnerIdOrderByVersionDesc(quotationId, partnerId).stream()
                 .filter(h -> !hideAdmin || !"SUPER_ADMIN".equalsIgnoreCase(h.getChangedByRole()))
                 .map(h -> new QuotationHistoryDto(
                         h.getId(), h.getVersion(), h.getAction(), h.getSummary(),

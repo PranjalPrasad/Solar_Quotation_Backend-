@@ -13,18 +13,34 @@ import jakarta.persistence.UniqueConstraint;
 
 import java.time.LocalDateTime;
 
+/**
+ * One notification for ONE user of ONE tenant. channelPartnerId is the tenant that OWNS the row and is always the
+ * recipient's own tenant: partner users get their partner's id, Super Admin users get the PLATFORM partner's id
+ * (so "referral awaiting approval" for Super Admin is a PLATFORM row, not a row of the partner that raised it).
+ *
+ * Deliberately NOT a TenantBaseEntity: a partner user's request legitimately creates PLATFORM-tenant rows (the
+ * Super Admin's referral notice) and TenantBaseEntity would block that write. NotificationWriter checks the
+ * recipient/tenant pair instead.
+ */
 @Entity
 @Table(name = "notification",
         uniqueConstraints = @UniqueConstraint(name = "uk_notification_dedupe",
                 columnNames = {"recipient_user_id", "dedupe_key"}),
-        indexes = @Index(name = "idx_notification_recipient",
-                columnList = "recipient_user_id,deleted,read_at,created_at"))
+        indexes = {
+                // list / unread-count / mark-read: always filtered by tenant first, then by recipient
+                @Index(name = "idx_notification_tenant_recipient",
+                        columnList = "channel_partner_id,recipient_user_id,deleted,read_at,created_at"),
+                // NotificationCleanupJob: per partner, oldest first
+                @Index(name = "idx_notification_tenant_created",
+                        columnList = "channel_partner_id,created_at")
+        })
 public class Notification extends BaseEntity {
 
     @Column(name = "recipient_user_id", nullable = false, updatable = false)
     private Long recipientUserId;
 
-    @Column(name = "channel_partner_id")
+    /** The tenant that owns this row (= the recipient's own tenant). Never null, never changed after insert. */
+    @Column(name = "channel_partner_id", nullable = false, updatable = false)
     private Long channelPartnerId;
 
     @Enumerated(EnumType.STRING)

@@ -28,7 +28,10 @@ import java.time.LocalDate;
         indexes = {
                 @Index(name = "idx_referral_quotation", columnList = "quotation_id"),
                 @Index(name = "idx_referral_owner_date", columnList = "channel_partner_id,quote_date"),
-                @Index(name = "idx_referral_referrer_status", columnList = "referrer_partner_id,status")
+                @Index(name = "idx_referral_referrer_status", columnList = "referrer_partner_id,status"),
+                // Dashboard: income as referrer (partner), and the platform wide "approved, not paid" sum.
+                @Index(name = "idx_referral_dash_referrer", columnList = "referrer_partner_id,deleted,status,referral_amount"),
+                @Index(name = "idx_referral_dash_status", columnList = "status,deleted,referral_amount")
         })
 public class Referral extends TenantBaseEntity {
 

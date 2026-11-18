@@ -7,9 +7,12 @@ public class ReportRowResponseDto {
 
     // ---- Quotation row ----
     public static class Quotation {
+        private Long id;
         private String quoteNo, customer, salesPerson, status, partnerName;
         private BigDecimal systemSizeKw, amount;
         private LocalDate date;
+        public Long getId() { return id; }
+        public void setId(Long v) { this.id = v; }
         public String getQuoteNo() { return quoteNo; }
         public void setQuoteNo(String v) { this.quoteNo = v; }
         public String getCustomer() { return customer; }

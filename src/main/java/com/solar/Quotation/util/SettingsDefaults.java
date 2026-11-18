@@ -32,6 +32,17 @@ public final class SettingsDefaults {
         return d;
     }
 
+    /** For a tenant that has not saved its own bank details yet: nothing, never another tenant's account. */
+    public static BankDetailsResponseDto emptyBank() {
+        BankDetailsResponseDto d = new BankDetailsResponseDto();
+        d.setAccountName("");
+        d.setBankName("");
+        d.setAccountNumber("");
+        d.setIfsc("");
+        d.setBranch("");
+        return d;
+    }
+
     public static QuotationDefaultsResponseDto quotationDefaults() {
         QuotationDefaultsResponseDto d = new QuotationDefaultsResponseDto();
         d.setTerms("1. Prices are inclusive of installation & commissioning.\n"

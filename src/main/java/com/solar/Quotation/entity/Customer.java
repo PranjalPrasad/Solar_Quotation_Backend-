@@ -15,7 +15,8 @@ import jakarta.persistence.UniqueConstraint;
         uniqueConstraints = @UniqueConstraint(columnNames = {"channel_partner_id", "mobile"}),
         indexes = {
                 @Index(name = "idx_customer_partner_created", columnList = "channel_partner_id,created_at"),
-                @Index(name = "idx_customer_partner_status", columnList = "channel_partner_id,status")
+                @Index(name = "idx_customer_partner_status", columnList = "channel_partner_id,status"),
+                @Index(name = "idx_customer_dash_count", columnList = "channel_partner_id,deleted,created_by")
         })
 public class Customer extends TenantBaseEntity {
 
@@ -88,4 +89,3 @@ public class Customer extends TenantBaseEntity {
     public RecordStatus getStatus() { return status; }
     public void setStatus(RecordStatus status) { this.status = status; }
 }
-

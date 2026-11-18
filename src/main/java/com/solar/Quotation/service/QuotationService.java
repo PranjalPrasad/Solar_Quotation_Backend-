@@ -1,9 +1,9 @@
 package com.solar.Quotation.service;
 
 import com.solar.Quotation.dto.requestdto.QuotationFilterRequestDto;
+import com.solar.Quotation.dto.requestdto.QuotationHistoryDto;
 import com.solar.Quotation.dto.requestdto.QuotationRequestDto;
 import com.solar.Quotation.dto.requestdto.QuotationStatusRequestDto;
-import com.solar.Quotation.dto.responsedto.AuditLogResponseDto;
 import com.solar.Quotation.dto.responsedto.PageResponse;
 import com.solar.Quotation.dto.responsedto.QuotationListItemResponseDto;
 import com.solar.Quotation.dto.responsedto.QuotationResponseDto;
@@ -15,7 +15,7 @@ public interface QuotationService {
 
     PageResponse<QuotationListItemResponseDto> list(QuotationFilterRequestDto filter);
 
-    /** partnerId is honoured for Super Admin only. */
+    /** Own tenant, or the partner named by ?viewPartnerId= for Super Admin on a GET. A partnerId parameter is ignored. */
     QuotationSummaryResponseDto summary(Long partnerId);
 
     QuotationResponseDto get(Long id);
@@ -32,6 +32,6 @@ public interface QuotationService {
 
     void delete(Long id);
 
-    /** Change history of one quotation. The tenant check runs first, so another partner's id gives 404. */
-    List<AuditLogResponseDto> history(Long id);
+    /** Change history of one quotation, newest first. The tenant check runs first, so another partner's id gives 404. */
+    List<QuotationHistoryDto> history(Long id);
 }

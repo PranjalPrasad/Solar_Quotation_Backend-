@@ -12,10 +12,14 @@ import com.solar.Quotation.entity.Quotation;
 import com.solar.Quotation.event.NotificationDraft;
 import com.solar.Quotation.event.NotificationRequestedEvent;
 import com.solar.Quotation.repository.CustomerRepository;
+import com.solar.Quotation.dto.responsedto.PartnerRefResponseDto;
 import com.solar.Quotation.repository.NotificationRecipientRepository;
+import com.solar.Quotation.security.Actors;
 import com.solar.Quotation.security.CurrentUser;
 import com.solar.Quotation.security.TenantContext;
 import com.solar.Quotation.service.NotificationPublisher;
+import com.solar.Quotation.service.PartnerRefProvider;
+import com.solar.Quotation.service.PlatformTenant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -28,7 +32,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class NotificationPublisherImpl implements NotificationPublisher {
@@ -41,19 +47,31 @@ public class NotificationPublisherImpl implements NotificationPublisher {
     private final ApplicationEventPublisher events;
     private final NotificationRecipientRepository recipients;
     private final CustomerRepository customerRepository;
+    private final PlatformTenant platform;
+    private final PartnerRefProvider partnerRefs;
 
     public NotificationPublisherImpl(ApplicationEventPublisher events,
                                      NotificationRecipientRepository recipients,
-                                     CustomerRepository customerRepository) {
+                                     CustomerRepository customerRepository,
+                                     PlatformTenant platform,
+                                     PartnerRefProvider partnerRefs) {
         this.events = events;
         this.recipients = recipients;
         this.customerRepository = customerRepository;
+        this.platform = platform;
+        this.partnerRefs = partnerRefs;
     }
 
+    /** Never throws: a notification problem is logged at ERROR and the caller's work carries on. */
     @Override
     public void publish(List<NotificationDraft> drafts) {
         if (drafts == null || drafts.isEmpty()) return;
-        events.publishEvent(new NotificationRequestedEvent(List.copyOf(drafts)));
+        try {
+            events.publishEvent(new NotificationRequestedEvent(List.copyOf(drafts)));
+            log.debug("[NOTIFY] queued {} {}", summary(drafts), Actors.describe());
+        } catch (RuntimeException ex) {
+            log.error("[NOTIFY] publish failed {} {}", summary(drafts), Actors.describe(), ex);
+        }
     }
 
     // ---------------------------------------------------------------- quotation
@@ -69,7 +87,7 @@ public class NotificationPublisherImpl implements NotificationPublisher {
                     NotificationSeverity.INFO, "New quotation created", message,
                     "QUOTATION", q.getId(), null));
         } catch (RuntimeException ex) {
-            log.warn("Could not build quotation-created notification for quotation {}", q.getId(), ex);
+            buildFailed("quotation-created", q.getChannelPartnerId(), q.getId(), ex);
         }
     }
 
@@ -93,20 +111,24 @@ public class NotificationPublisherImpl implements NotificationPublisher {
                         "QUOTATION", q.getId(), null));
             }
 
-            // QuotationServiceImpl turns an accepted referred quotation into a PENDING referral: Super Admin pays/approves it
+            // QuotationServiceImpl turns an accepted referred quotation into a PENDING referral: Super Admin pays/approves it.
+            // The notice belongs to the PLATFORM tenant (the Super Admins' own tenant), NOT to the partner that raised it;
+            // the partner is named in the message and the quotation is reachable through entityType/entityId.
             if (now == QuotationStatus.ACCEPTED && q.isReferred() && q.getReferralStatus() == ReferralStatus.PENDING) {
+                Long platformId = platform.id();
                 Set<Long> admins = new LinkedHashSet<>(
-                        recipients.activeUserIdsByRole(SUPER_ADMIN, RecordStatus.ACTIVE));
+                        recipients.activeUserIdsByPartnerAndRole(platformId, SUPER_ADMIN, RecordStatus.ACTIVE));
                 admins.remove(actorId());
-                String message = q.getCode() + " was accepted and has a referral of Rs. "
+                String from = partnerName(q.getChannelPartnerId());
+                String message = q.getCode() + (from == null ? "" : " of " + from) + " was accepted and has a referral of Rs. "
                         + (q.getReferralAmount() == null ? "0" : q.getReferralAmount().toPlainString())
                         + (q.getReferredBy() == null || q.getReferredBy().isBlank() ? "" : " (" + q.getReferredBy() + ")");
-                publish(drafts(admins, q.getChannelPartnerId(), NotificationType.REFERRAL_PENDING,
+                publish(drafts(admins, platformId, NotificationType.REFERRAL_PENDING,
                         NotificationSeverity.INFO, "Referral awaiting approval", message,
                         "QUOTATION", q.getId(), "REFERRAL_PENDING:" + q.getId()));
             }
         } catch (RuntimeException ex) {
-            log.warn("Could not build quotation-status notification for quotation {}", q.getId(), ex);
+            buildFailed("quotation-status", q.getChannelPartnerId(), q.getId(), ex);
         }
     }
 
@@ -122,7 +144,7 @@ public class NotificationPublisherImpl implements NotificationPublisher {
                     c.getName() + " was added by " + actorName(),
                     "CUSTOMER", c.getId(), null));
         } catch (RuntimeException ex) {
-            log.warn("Could not build customer-created notification for customer {}", c.getId(), ex);
+            buildFailed("customer-created", c.getChannelPartnerId(), c.getId(), ex);
         }
     }
 
@@ -142,7 +164,7 @@ public class NotificationPublisherImpl implements NotificationPublisher {
                     severity, "Project status updated", message,
                     "PROJECT", p.getId(), null));
         } catch (RuntimeException ex) {
-            log.warn("Could not build project-status notification for project {}", p.getId(), ex);
+            buildFailed("project-status", p.getChannelPartnerId(), p.getId(), ex);
         }
     }
 
@@ -166,7 +188,7 @@ public class NotificationPublisherImpl implements NotificationPublisher {
                     overdue ? "Follow-up overdue" : "Follow-up due today", message,
                     "CUSTOMER", customerId, type.name() + ":" + followupId + ":" + nextDate));
         } catch (RuntimeException ex) {
-            log.warn("Could not build follow-up reminder for follow-up {}", followupId, ex);
+            buildFailed("followup-reminder", partnerId, followupId, ex);
         }
     }
 
@@ -184,7 +206,7 @@ public class NotificationPublisherImpl implements NotificationPublisher {
                     code + " for " + customerName + " " + when,
                     "QUOTATION", quotationId, "QUOTATION_EXPIRING:" + quotationId + ":" + validUntil));
         } catch (RuntimeException ex) {
-            log.warn("Could not build quotation-expiry reminder for quotation {}", quotationId, ex);
+            buildFailed("quotation-expiry", partnerId, quotationId, ex);
         }
     }
 
@@ -192,6 +214,17 @@ public class NotificationPublisherImpl implements NotificationPublisher {
 
     private Set<Long> partnerAdmins(Long partnerId) {
         return new LinkedHashSet<>(recipients.activeUserIdsByPartnerAndRole(partnerId, PARTNER_ADMIN, RecordStatus.ACTIVE));
+    }
+
+    /** Partner name for a message; a lookup problem only drops the name, never the notification. */
+    private String partnerName(Long partnerId) {
+        try {
+            PartnerRefResponseDto ref = partnerRefs.ref(partnerId);
+            return ref == null ? null : ref.getName();
+        } catch (RuntimeException ex) {
+            log.warn("[NOTIFY] partner name lookup failed partnerId={}", partnerId, ex);
+            return null;
+        }
     }
 
     private String customerName(Long customerId) {
@@ -216,10 +249,29 @@ public class NotificationPublisherImpl implements NotificationPublisher {
         return e == null ? "-" : e.name().toLowerCase().replace('_', ' ');
     }
 
+    /** ERROR, ids only (no names, no message text). The caller's request is not affected. */
+    private static void buildFailed(String what, Long partnerId, Long entityId, RuntimeException ex) {
+        log.error("[NOTIFY] publish failed (could not build) what={} partnerId={} entityId={} {}",
+                what, partnerId, entityId, Actors.describe(), ex);
+    }
+
+    /** "type=X drafts=N partnerIds=[..]" - null safe, because it is used inside catch blocks. */
+    private static String summary(List<NotificationDraft> drafts) {
+        List<NotificationDraft> ok = drafts.stream().filter(Objects::nonNull).toList();
+        String type = ok.isEmpty() ? "-" : String.valueOf(ok.get(0).type());
+        Set<Long> partners = ok.stream().map(NotificationDraft::partnerId).collect(Collectors.toCollection(LinkedHashSet::new));
+        return "type=" + type + " drafts=" + drafts.size() + " partnerIds=" + partners;
+    }
+
     private static List<NotificationDraft> drafts(Collection<Long> to, Long partnerId, NotificationType type,
                                                   NotificationSeverity severity, String title, String message,
                                                   String entityType, Long entityId, String dedupeKey) {
         List<NotificationDraft> out = new ArrayList<>();
+        if (partnerId == null) {   // channel_partner_id is NOT NULL: a draft without a tenant can never be stored
+            log.error("[NOTIFY] publish failed (no partnerId) type={} entityType={} entityId={} recipients={}",
+                    type, entityType, entityId, to == null ? 0 : to.size());
+            return out;
+        }
         for (Long userId : to) {
             if (userId == null) continue;
             out.add(new NotificationDraft(userId, partnerId, type, severity,

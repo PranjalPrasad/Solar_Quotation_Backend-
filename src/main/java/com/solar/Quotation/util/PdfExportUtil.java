@@ -24,6 +24,9 @@ public final class PdfExportUtil {
     private static final Font HEAD = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9);
     private static final Font BODY = FontFactory.getFont(FontFactory.HELVETICA, 8);
 
+    /** Hard ceiling for one PDF, whatever the caller passes (the service refuses larger exports first). */
+    public static final int MAX_ROWS = 10_000;
+
     private PdfExportUtil() {}
 
     public static byte[] quotations(List<ReportRowResponseDto.Quotation> rows) {
@@ -51,6 +54,9 @@ public final class PdfExportUtil {
     }
 
     private static <T> byte[] build(String title, String[] headers, List<T> rows, Function<T, Object[]> mapper) {
+        if (rows.size() > MAX_ROWS) {
+            throw new IllegalArgumentException("Too many rows for one export: " + rows.size());
+        }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         Document doc = new Document(PageSize.A4.rotate(), 24, 24, 24, 24);
         try {

@@ -4,6 +4,7 @@ import com.solar.Quotation.dto.requestdto.*;
 import com.solar.Quotation.dto.responsedto.*;
 import com.solar.Quotation.security.RequirePermission;
 import com.solar.Quotation.service.ChannelPartnerService;
+import com.solar.Quotation.service.PartnerAllowedRoleService;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -14,17 +15,19 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 /**
- * Super Admin only (CHANNEL_PARTNER is a platform-only module).
- * Referral endpoints (/{id}/referrals and mark-paid) belong to the referral module.
+ * Super Admin only (PlatformOnlyInterceptor bhi enforce karta hai).
+ * /api/partners = spec wala alias, /api/channel-partners = purana path.
  */
 @RestController
-@RequestMapping("/api/channel-partners")
+@RequestMapping({"/api/channel-partners", "/api/partners"})
 public class ChannelPartnerController {
 
     private final ChannelPartnerService service;
+    private final PartnerAllowedRoleService allowedRoles;
 
-    public ChannelPartnerController(ChannelPartnerService service) {
+    public ChannelPartnerController(ChannelPartnerService service, PartnerAllowedRoleService allowedRoles) {
         this.service = service;
+        this.allowedRoles = allowedRoles;
     }
 
     @GetMapping
@@ -78,6 +81,19 @@ public class ChannelPartnerController {
         return ApiResponse.ok(service.users(id, filter));
     }
 
+    @GetMapping("/{id}/allowed-roles")
+    @RequirePermission("CHANNEL_PARTNER:VIEW")
+    public ApiResponse<AllowedRolesResponseDto> allowedRoles(@PathVariable Long id) {
+        return ApiResponse.ok(allowedRoles.get(id));
+    }
+
+    @PutMapping("/{id}/allowed-roles")
+    @RequirePermission("CHANNEL_PARTNER:EDIT")
+    public ApiResponse<AllowedRolesResponseDto> updateAllowedRoles(@PathVariable Long id,
+                                                                   @Valid @RequestBody AllowedRolesRequestDto req) {
+        return ApiResponse.ok(allowedRoles.replace(id, req), "Allowed roles updated");
+    }
+
     @GetMapping("/{id}/referrals")
     @RequirePermission("CHANNEL_PARTNER:VIEW")
     public ResponseEntity<ApiResponse<PageResponse<ReferralActivityResponseDto>>> referrals(
@@ -86,9 +102,7 @@ public class ChannelPartnerController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         return ResponseEntity.ok(ApiResponse.ok(service.getReferralActivity(
-                id, status, org.springframework.data.domain.PageRequest.of(
-                        page, size, org.springframework.data.domain.Sort.by(
-                                org.springframework.data.domain.Sort.Direction.DESC, "createdAt")))));
+                id, status, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")))));
     }
 
     @PatchMapping("/{id}/referrals/{quotationId}/mark-paid")
@@ -96,7 +110,7 @@ public class ChannelPartnerController {
     public ResponseEntity<ApiResponse<Void>> markPaid(
             @PathVariable Long id,
             @PathVariable Long quotationId,
-            @jakarta.validation.Valid @RequestBody ReferralMarkPaidRequestDto req) {
+            @Valid @RequestBody ReferralMarkPaidRequestDto req) {
         service.markReferralPaid(id, quotationId, req);
         return ResponseEntity.ok(ApiResponse.ok(null, "Referral marked paid"));
     }

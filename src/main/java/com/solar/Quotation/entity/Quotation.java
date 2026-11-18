@@ -20,7 +20,13 @@ import java.time.LocalDate;
         indexes = {
                 @Index(name = "idx_quotation_partner_created", columnList = "channel_partner_id,created_at"),
                 @Index(name = "idx_quotation_partner_status", columnList = "channel_partner_id,status"),
-                @Index(name = "idx_quotation_customer", columnList = "customer_id")
+                @Index(name = "idx_quotation_customer", columnList = "customer_id"),
+                // Dashboard (all tenant scoped, all covering): status totals / month + today / size buckets / recent list.
+                // "deleted" is in every one because every dashboard query filters on it.
+                @Index(name = "idx_quotation_dash_status", columnList = "channel_partner_id,deleted,status,total_amount"),
+                @Index(name = "idx_quotation_dash_date", columnList = "channel_partner_id,deleted,quote_date,total_amount"),
+                @Index(name = "idx_quotation_dash_size", columnList = "channel_partner_id,deleted,system_size_kw"),
+                @Index(name = "idx_quotation_dash_recent", columnList = "channel_partner_id,deleted,created_at,id")
         })
 public class Quotation extends TenantBaseEntity {
 

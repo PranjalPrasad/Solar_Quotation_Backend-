@@ -52,7 +52,7 @@ public class ReferralController {
         return ApiResponse.ok(service.summary(partnerId, referrerPartnerId));
     }
 
-    /** Super Admin only (checked in the service). ?partnerIds=1,2,3 */
+    /** Super Admin only (checked in the service). ?partnerIds=1,2,3 . Totals cover the read tenant only (own, or ?viewPartnerId=). */
     @GetMapping("/partner-totals")
     @RequirePermission("REFERRAL:VIEW")
     public ApiResponse<List<ReferralPartnerTotalsResponseDto>> partnerTotals(@RequestParam List<Long> partnerIds) {
@@ -72,7 +72,7 @@ public class ReferralController {
         return ApiResponse.ok(service.history(id));
     }
 
-    /** Super Admin only (checked here by permission and again in the service). */
+    /** Own tenant only: the partner that owns the quotation pays the referral. Another tenant's id gives 404 (checked in the service). */
     @PatchMapping("/{id}/mark-paid")
     @RequirePermission("REFERRAL:MARK_PAID")
     public ApiResponse<ReferralResponseDto> markPaid(@PathVariable Long id,

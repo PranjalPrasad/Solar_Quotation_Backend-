@@ -17,7 +17,9 @@ import com.solar.Quotation.dto.responsedto.ProductCatalogItemResponseDto;
 import com.solar.Quotation.dto.responsedto.ProductResponseDto;
 import com.solar.Quotation.dto.responsedto.ProductSummaryResponseDto;
 import com.solar.Quotation.entity.Product;
+import com.solar.Quotation.exception.ApiException;
 import com.solar.Quotation.exception.BusinessException;
+import com.solar.Quotation.exception.ForbiddenException;
 import com.solar.Quotation.exception.ResourceNotFoundException;
 import com.solar.Quotation.repository.ProductRepository;
 import com.solar.Quotation.security.TenantResolver;
@@ -28,6 +30,8 @@ import com.solar.Quotation.util.AuditInfoMapper;
 import com.solar.Quotation.util.CodeGenerator;
 import com.solar.Quotation.util.DiffUtil;
 import com.solar.Quotation.util.PartnerGuard;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -44,13 +48,26 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * Products are private to each partner. There is deliberately no owner (data scope OWN) filter here:
  * the catalog is shared by every user of the same partner.
+ *
+ * Tenant rules (Super Admin works in the PLATFORM catalog like any other tenant):
+ *   READS  list / catalog / summary / get  -> tenantResolver.effectiveReadPartnerId(): own tenant, or the partner
+ *          named by ?viewPartnerId= for data scope ALL on a GET. A partnerId in the filter is ignored.
+ *   WRITES create / update / status / delete / stock -> always the caller's own tenant; a record of another tenant
+ *          is refused (404, WARN) through tenantResolver.assertWritable.
+ *   STOCK HISTORY and stock changes stay in the caller's own tenant.
+ *
+ * Logging: [PRODUCT] INFO for create/update/status/delete/stock, WARN for duplicate SKU and validation,
+ * ERROR with stack for anything unexpected in a write.
  */
 @Service
 public class ProductServiceImpl implements ProductService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductServiceImpl.class);
 
     private static final Set<String> SORT_FIELDS = Set.of("createdAt", "name", "category", "brand", "price", "stock", "status");
     private static final int CATALOG_LIMIT = 1000;
@@ -84,7 +101,7 @@ public class ProductServiceImpl implements ProductService {
     @Override
     @Transactional(readOnly = true)
     public PageResponse<ProductResponseDto> list(ProductFilterRequestDto f) {
-        Long partnerId = tenantResolver.effectivePartnerId(f.getPartnerId());
+        Long partnerId = tenantResolver.effectiveReadPartnerId();   // f.getPartnerId() is deliberately ignored
         Page<Product> page = productRepository.search(partnerId, parseCategory(f.getCategory()),
                 parseStatus(f.getStatus()), f.getGstPercent(), parseStockMode(f.getStockStatus()),
                 f.getSearchOrNull(), f.toPageable("createdAt,desc", SORT_FIELDS));
@@ -94,16 +111,16 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<ProductCatalogItemResponseDto> catalog(Long requestedPartnerId) {
-        Long partnerId = tenantResolver.effectivePartnerId(requestedPartnerId);
+    public List<ProductCatalogItemResponseDto> catalog() {
+        Long partnerId = tenantResolver.effectiveReadPartnerId();
         return productRepository.findCatalog(partnerId, RecordStatus.ACTIVE, PageRequest.of(0, CATALOG_LIMIT))
                 .stream().map(this::toCatalogItem).toList();
     }
 
     @Override
     @Transactional(readOnly = true)
-    public ProductSummaryResponseDto summary(Long requestedPartnerId) {
-        Long partnerId = tenantResolver.effectivePartnerId(requestedPartnerId);
+    public ProductSummaryResponseDto summary() {
+        Long partnerId = tenantResolver.effectiveReadPartnerId();
         ProductSummaryResponseDto s = new ProductSummaryResponseDto();
         s.setTotal(productRepository.countFiltered(partnerId, null, 0));
         s.setActive(productRepository.countFiltered(partnerId, RecordStatus.ACTIVE, 0));
@@ -117,7 +134,7 @@ public class ProductServiceImpl implements ProductService {
     @Override
     @Transactional(readOnly = true)
     public ProductResponseDto get(Long id) {
-        return toSingleResponse(findProduct(id));
+        return toSingleResponse(findForRead(id));
     }
 
     // ---------------------------------------------------------------- write
@@ -125,12 +142,16 @@ public class ProductServiceImpl implements ProductService {
     @Override
     @Transactional
     public ProductResponseDto create(ProductRequestDto req) {
-        Long partnerId = tenantResolver.requirePartnerIdForCreate(req.getPartnerId());
+        return guarded("create", () -> doCreate(req));
+    }
+
+    private ProductResponseDto doCreate(ProductRequestDto req) {
+        Long partnerId = tenantResolver.requirePartnerIdForCreate(null);   // always the caller's own tenant
         partnerGuard.assertUsable(partnerId);
 
         String sku = blankToNull(req.getSku());
         if (sku != null && productRepository.existsByChannelPartnerIdAndSkuAndDeletedFalse(partnerId, sku)) {
-            throw duplicateSku();
+            throw duplicateSku(partnerId, sku);
         }
 
         Product p = new Product();
@@ -141,19 +162,25 @@ public class ProductServiceImpl implements ProductService {
         Product saved = productRepository.save(p);
 
         auditService.record(AuditAction.CREATE, "PRODUCT", "Product", saved.getId(), saved.getCode(),
-                partnerId, DiffUtil.diff(null, snapshot(saved)));
+                partnerId, null, snapshot(saved));
+        log.info("[PRODUCT] created id={} code={} partnerId={} category={} stock={}", saved.getId(), saved.getCode(),
+                partnerId, saved.getCategory(), saved.getStock());
         return toSingleResponse(saved);
     }
 
     @Override
     @Transactional
     public ProductResponseDto update(Long id, ProductRequestDto req) {
-        Product p = findProduct(id);
+        return guarded("update", () -> doUpdate(id, req));
+    }
+
+    private ProductResponseDto doUpdate(Long id, ProductRequestDto req) {
+        Product p = findForWrite(id);
         String sku = blankToNull(req.getSku());
         if (sku != null && !sku.equals(p.getSku())
                 && productRepository.existsByChannelPartnerIdAndSkuAndDeletedFalseAndIdNot(
                 p.getChannelPartnerId(), sku, p.getId())) {
-            throw duplicateSku();
+            throw duplicateSku(p.getChannelPartnerId(), sku);
         }
 
         Map<String, Object> before = snapshot(p);
@@ -162,37 +189,50 @@ public class ProductServiceImpl implements ProductService {
         Product saved = productRepository.save(p);
 
         auditService.record(AuditAction.UPDATE, "PRODUCT", "Product", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved)));
+                saved.getChannelPartnerId(), before, snapshot(saved));
+        log.info("[PRODUCT] updated id={} code={} partnerId={}", saved.getId(), saved.getCode(), saved.getChannelPartnerId());
         return toSingleResponse(saved);
     }
 
     @Override
     @Transactional
     public ProductResponseDto updateStatus(Long id, ProductStatusRequestDto req) {
-        Product p = findProduct(id);
+        return guarded("status change", () -> doUpdateStatus(id, req));
+    }
+
+    private ProductResponseDto doUpdateStatus(Long id, ProductStatusRequestDto req) {
+        Product p = findForWrite(id);
         Map<String, Object> before = snapshot(p);
         p.setStatus(RecordStatus.valueOf(req.getStatus()));
         Product saved = productRepository.save(p);
 
         auditService.record(AuditAction.STATUS_CHANGE, "PRODUCT", "Product", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved)));
+                saved.getChannelPartnerId(), before, snapshot(saved));
+        log.info("[PRODUCT] status changed id={} code={} partnerId={} {}->{}", saved.getId(), saved.getCode(),
+                saved.getChannelPartnerId(), before.get("status"), saved.getStatus());
         return toSingleResponse(saved);
     }
 
     @Override
     @Transactional
     public ProductResponseDto adjustStock(Long id, StockAdjustRequestDto req) {
+        return guarded("stock adjust", () -> doAdjustStock(id, req));
+    }
+
+    private ProductResponseDto doAdjustStock(Long id, StockAdjustRequestDto req) {
         if (req.getAdjustment() == 0) {
-            throw new BusinessException("VALIDATION_ERROR", "Adjustment cannot be 0");
+            throw invalid("VALIDATION_ERROR", "Adjustment cannot be 0", "stock adjustment is 0 productId=" + id);
         }
-        Product p = findProduct(id);
+        Product p = findForWrite(id);
         long newStock = (long) p.getStock() + req.getAdjustment();
         if (newStock < 0) {
-            throw new BusinessException("BUSINESS_RULE", "Stock cannot go below zero");
+            throw invalid("BUSINESS_RULE", "Stock cannot go below zero",
+                    "stock would go below zero id=" + id + " stock=" + p.getStock() + " adjustment=" + req.getAdjustment());
         }
         if (newStock > Integer.MAX_VALUE) {
-            throw new BusinessException("VALIDATION_ERROR", "Stock is too large");
+            throw invalid("VALIDATION_ERROR", "Stock is too large", "stock too large id=" + id);
         }
+        int oldStock = p.getStock();
 
         Map<String, Object> before = new LinkedHashMap<>();
         before.put("stock", String.valueOf(p.getStock()));
@@ -202,22 +242,21 @@ public class ProductServiceImpl implements ProductService {
 
         Map<String, Object> after = new LinkedHashMap<>();
         after.put("stock", String.valueOf(saved.getStock()));
-        List<Map<String, String>> changes = new ArrayList<>(DiffUtil.diff(before, after));
-        Map<String, String> reason = new LinkedHashMap<>();
-        reason.put("field", "stockReason");
-        reason.put("old", null);
-        reason.put("new", req.getReason().trim());
-        changes.add(reason);
+        after.put("stockReason", req.getReason().trim());
+        after.put("stockAdjustment", (req.getAdjustment() > 0 ? "+" : "") + req.getAdjustment());
 
         auditService.record(AuditAction.UPDATE, "PRODUCT", "Product", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), changes);
+                saved.getChannelPartnerId(), before, after);
+        log.info("[PRODUCT] stock changed id={} code={} partnerId={} {}->{} adjustment={} reason=\"{}\"", saved.getId(),
+                saved.getCode(), saved.getChannelPartnerId(), oldStock, saved.getStock(), req.getAdjustment(),
+                clean(req.getReason()));
         return toSingleResponse(saved);
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<StockMovementResponseDto> stockHistory(Long id) {
-        Product p = findProduct(id);
+        Product p = findOwn(id);
         return movementRepository.findTop200ByProductIdAndDeletedFalseOrderByCreatedAtDescIdDesc(p.getId())
                 .stream().map(this::toMovement).toList();
     }
@@ -225,6 +264,10 @@ public class ProductServiceImpl implements ProductService {
     @Override
     @Transactional
     public List<StockMovementResponseDto> addStockMovement(Long id, StockMovementRequestDto req) {
+        return guarded("stock movement", () -> doAddStockMovement(id, req));
+    }
+
+    private List<StockMovementResponseDto> doAddStockMovement(Long id, StockMovementRequestDto req) {
         int qty = req.getQuantity();
         boolean out = "OUT".equals(req.getType());
         String reason = blankToNull(req.getReason());
@@ -234,7 +277,7 @@ public class ProductServiceImpl implements ProductService {
         StockAdjustRequestDto adj = new StockAdjustRequestDto();
         adj.setAdjustment(out ? -qty : qty);
         adj.setReason(reason);
-        adjustStock(id, adj);                       // validates stock >= 0, updates product, writes ledger + audit
+        doAdjustStock(id, adj);                     // validates stock >= 0, updates product, writes ledger + audit
         return stockHistory(id);
     }
 
@@ -263,7 +306,15 @@ public class ProductServiceImpl implements ProductService {
     @Override
     @Transactional
     public void delete(Long id) {
-        Product p = findProduct(id);
+        guarded("delete", () -> {
+            doDelete(id);
+            return null;
+        });
+    }
+
+    private void doDelete(Long id) {
+        Product p = findForWrite(id);
+        Map<String, Object> before = snapshot(p);
         String code = p.getCode();
         Long partnerId = p.getChannelPartnerId();
         if (p.getSku() != null) {
@@ -272,18 +323,63 @@ public class ProductServiceImpl implements ProductService {
         p.setStatus(RecordStatus.INACTIVE);
         p.setDeleted(true);
         productRepository.save(p);
-        auditService.record(AuditAction.DELETE, "PRODUCT", "Product", id, code, partnerId, null);
+        auditService.record(AuditAction.DELETE, "PRODUCT", "Product", id, code, partnerId, before, null);
+        log.info("[PRODUCT] deleted id={} code={} partnerId={}", id, code, partnerId);
     }
 
     // ---------------------------------------------------------------- helpers
 
-    private Product findProduct(Long id) {
-        return productRepository.findOne(id, tenantResolver.effectivePartnerId(null))
+    /** GET: the own tenant, or the viewed partner for Super Admin. */
+    private Product findForRead(Long id) {
+        return productRepository.findOne(id, tenantResolver.effectiveReadPartnerId())
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
     }
 
-    private BusinessException duplicateSku() {
+    /** Always the caller's own tenant, whatever view partner the request carries. */
+    private Product findOwn(Long id) {
+        return productRepository.findOne(id, tenantResolver.ownPartnerId())
+                .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
+    }
+
+    /**
+     * Writes: loads the record without a tenant filter, then refuses anything outside the own tenant.
+     * A record of another tenant looks exactly like a missing one (404) and TenantResolver logs it at WARN.
+     */
+    private Product findForWrite(Long id) {
+        Product p = productRepository.findOne(id, null)
+                .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
+        tenantResolver.assertWritable(p.getChannelPartnerId(), "Product", id);
+        return p;
+    }
+
+    private BusinessException duplicateSku(Long partnerId, String sku) {
+        log.warn("[PRODUCT] duplicate SKU partnerId={} sku={}", partnerId, clean(sku));
         return new BusinessException("DUPLICATE", "A product with this SKU already exists", HttpStatus.CONFLICT);
+    }
+
+    /** Logs a validation problem at WARN and returns the exception to throw. */
+    private BusinessException invalid(String code, String message, String logDetail) {
+        log.warn("[PRODUCT] validation: {}", logDetail);
+        return new BusinessException(code, message);
+    }
+
+    /** Runs a write; anything unexpected is logged at ERROR with the stack, then rethrown to the API error handler. */
+    private <T> T guarded(String operation, Supplier<T> body) {
+        try {
+            return body.get();
+        } catch (BusinessException | ResourceNotFoundException | ForbiddenException | ApiException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            log.error("[PRODUCT] {} failed unexpectedly", operation, e);
+            throw e;
+        }
+    }
+
+    /** Strips control characters from user text before it goes into a log line (log forging). */
+    private static String clean(String s) {
+        if (s == null) return "-";
+        String t = s.replaceAll("[\\r\\n\\t]", " ");
+        return t.length() > 80 ? t.substring(0, 80) : t;
     }
 
     private void applyFields(Product p, ProductRequestDto req) {
@@ -313,7 +409,8 @@ public class ProductServiceImpl implements ProductService {
             return req.getMrp().multiply(factor).setScale(2, RoundingMode.HALF_UP);
         }
         if (req.getPrice() == null) {
-            throw new BusinessException("VALIDATION_ERROR", "Price is required when MRP and discount are not both given");
+            throw invalid("VALIDATION_ERROR", "Price is required when MRP and discount are not both given",
+                    "price missing and mrp/discount not both given");
         }
         return req.getPrice().setScale(2, RoundingMode.HALF_UP);
     }
@@ -332,7 +429,7 @@ public class ProductServiceImpl implements ProductService {
         try {
             return ProductCategory.valueOf(value.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            throw new BusinessException("VALIDATION_ERROR", "Unknown category " + value);
+            throw invalid("VALIDATION_ERROR", "Unknown category " + value, "unknown category " + clean(value));
         }
     }
 
@@ -343,7 +440,7 @@ public class ProductServiceImpl implements ProductService {
         try {
             return RecordStatus.valueOf(value.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            throw new BusinessException("VALIDATION_ERROR", "Unknown status " + value);
+            throw invalid("VALIDATION_ERROR", "Unknown status " + value, "unknown status " + clean(value));
         }
     }
 
@@ -356,7 +453,8 @@ public class ProductServiceImpl implements ProductService {
             case "OUT_OF_STOCK" -> 1;
             case "LOW_STOCK" -> 2;
             case "IN_STOCK" -> 3;
-            default -> throw new BusinessException("VALIDATION_ERROR", "Unknown stock status " + value);
+            default -> throw invalid("VALIDATION_ERROR", "Unknown stock status " + value,
+                    "unknown stock status " + clean(value));
         };
     }
 

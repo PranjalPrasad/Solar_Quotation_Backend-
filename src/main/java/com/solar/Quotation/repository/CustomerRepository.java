@@ -1,6 +1,5 @@
 package com.solar.Quotation.repository;
 
-
 import com.solar.Quotation.Enum.CustomerType;
 import com.solar.Quotation.Enum.RecordStatus;
 import com.solar.Quotation.entity.Customer;
@@ -12,6 +11,12 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
 
+/**
+ * Tenant rule: list / count queries REQUIRE a partner id (no "is null = everybody" branch), so a null that
+ * slips through returns nothing instead of every tenant's customers.
+ * findOne keeps the nullable partner only for the write path: it loads by id, then
+ * TenantResolver.assertWritable refuses (404 + WARN) a record of another tenant.
+ */
 public interface CustomerRepository extends JpaRepository<Customer, Long> {
 
     @Query("select c from Customer c where c.id = :id and c.deleted = false "
@@ -22,7 +27,7 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
                                @Param("ownerId") Long ownerId);
 
     @Query("select c from Customer c where c.deleted = false "
-            + "and (:partnerId is null or c.channelPartnerId = :partnerId) "
+            + "and c.channelPartnerId = :partnerId "
             + "and (:ownerId is null or c.createdBy = :ownerId) "
             + "and (:type is null or c.type = :type) "
             + "and (:status is null or c.status = :status) "
@@ -39,7 +44,7 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
                           Pageable pageable);
 
     @Query("select count(c) from Customer c where c.deleted = false "
-            + "and (:partnerId is null or c.channelPartnerId = :partnerId) "
+            + "and c.channelPartnerId = :partnerId "
             + "and (:ownerId is null or c.createdBy = :ownerId) "
             + "and (:type is null or c.type = :type) "
             + "and (:status is null or c.status = :status)")

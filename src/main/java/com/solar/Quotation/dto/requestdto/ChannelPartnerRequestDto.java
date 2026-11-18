@@ -12,7 +12,7 @@ import java.math.BigDecimal;
 
 /**
  * Create and update a channel partner. adminUser is required on create (the first CHANNEL_PARTNER_ADMIN
- * of that partner) and ignored on update.
+ * of that partner) and ignored on update. Admin username optional: blank => generated.
  */
 public class ChannelPartnerRequestDto {
 
@@ -78,7 +78,7 @@ public class ChannelPartnerRequestDto {
         @Size(max = 120, message = "Admin email is too long")
         private String email;
 
-        @NotBlank(message = "Admin username is required")
+        /** Optional. Blank => generated from partner code. */
         @Size(min = 3, max = 60, message = "Username must be 3 to 60 characters")
         @Pattern(regexp = "^[A-Za-z0-9._-]+$", message = "Username may contain letters, digits, dot, underscore and hyphen")
         private String username;

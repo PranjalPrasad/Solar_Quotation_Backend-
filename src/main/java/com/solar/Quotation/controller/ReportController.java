@@ -122,9 +122,10 @@ public class ReportController {
                 filter(from, to, status, salesUserId, partnerId, 0, 10000, null), type, format);
 
         boolean excel = "EXCEL".equalsIgnoreCase(format);
-        String filename = type.toLowerCase() + "." + (excel ? "xlsx" : "pdf");
+        String filename = type.replaceAll("[^A-Za-z0-9_-]", "").toLowerCase() + "." + (excel ? "xlsx" : "pdf");
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + filename)
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
                 .contentType(excel
                         ? MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                         : MediaType.APPLICATION_PDF)

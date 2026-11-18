@@ -11,7 +11,8 @@ import java.math.BigDecimal;
         indexes = {
                 @Index(name = "idx_project_partner_created", columnList = "channel_partner_id,created_at"),
                 @Index(name = "idx_project_partner_status", columnList = "channel_partner_id,status"),
-                @Index(name = "idx_project_customer", columnList = "customer_id")
+                @Index(name = "idx_project_customer", columnList = "customer_id"),
+                @Index(name = "idx_project_dash_count", columnList = "channel_partner_id,deleted,created_by")
         })
 public class Project extends TenantBaseEntity {
 

@@ -6,10 +6,10 @@ import com.solar.Quotation.Enum.ProjectStatus;
 import com.solar.Quotation.Enum.QuotationStatus;
 import com.solar.Quotation.Enum.ReferralStatus;
 import com.solar.Quotation.dto.requestdto.QuotationFilterRequestDto;
+import com.solar.Quotation.dto.requestdto.QuotationHistoryDto;
 import com.solar.Quotation.dto.requestdto.QuotationItemRequestDto;
 import com.solar.Quotation.dto.requestdto.QuotationRequestDto;
 import com.solar.Quotation.dto.requestdto.QuotationStatusRequestDto;
-import com.solar.Quotation.dto.responsedto.AuditLogResponseDto;
 import com.solar.Quotation.dto.responsedto.BankDetailsResponseDto;
 import com.solar.Quotation.dto.responsedto.CustomerRefResponseDto;
 import com.solar.Quotation.dto.responsedto.PageResponse;
@@ -30,9 +30,12 @@ import com.solar.Quotation.repository.ProductRepository;
 import com.solar.Quotation.repository.ProjectRepository;
 import com.solar.Quotation.repository.QuotationItemRepository;
 import com.solar.Quotation.repository.QuotationRepository;
+import com.solar.Quotation.security.Actors;
 import com.solar.Quotation.security.TenantResolver;
+import com.solar.Quotation.service.ApprovalGuard;
 import com.solar.Quotation.service.AuditService;
 import com.solar.Quotation.service.PartnerRefProvider;
+import com.solar.Quotation.service.QuotationHistoryService;
 import com.solar.Quotation.service.QuotationService;
 import com.solar.Quotation.service.SettingsProvider;
 import com.solar.Quotation.util.AuditInfoMapper;
@@ -42,6 +45,8 @@ import com.solar.Quotation.util.MoneyUtil;
 import com.solar.Quotation.util.NumberToWords;
 import com.solar.Quotation.util.QuotationCalculator;
 import com.solar.Quotation.util.SubsidyCalculator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,8 +65,27 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
+/**
+ * Tenant rules (same as Customers and Products):
+ *   READS   list / summary / get / history -> tenantResolver.effectiveReadPartnerId(): own tenant, or the partner named
+ *           by ?viewPartnerId= for data scope ALL on a GET. A partnerId in a filter or parameter is ignored (WARN).
+ *   WRITES  create / update / status / delete -> always the caller's own tenant. The quotation is loaded by id and
+ *           refused with 404 (+ WARN) when it belongs to another tenant (assertWritable).
+ *   ITEMS   never loaded by their own id: always through a quotation that already passed the tenant check, with
+ *           that quotation's partner id on every query.
+ *   HISTORY every row carries channel_partner_id and every read filters by it, after the quotation was tenant-checked.
+ *
+ * Audit: create / update / delete / status change / approve / reject / convert write an audit row with previous and
+ * new values, under the quotation's own partner id; the same writes also append a row to quotation_history.
+ * Approval: PATCH status needs APPROVAL:EDIT, never works on another tenant (so the viewPartnerId view is read-only),
+ * and the creator cannot approve / reject their own quotation (see ApprovalGuard). Decisions log "[APPROVAL] ..." at INFO.
+ * Logging: [QUOTATION] status transitions and writes at INFO, calculation inputs (numbers only, no personal data)
+ * at WARN when a calculation fails. Names, mobiles and e-mails are never logged, only ids and codes.
+ */
 @Service
 public class QuotationServiceImpl implements QuotationService {
+
+    private static final Logger log = LoggerFactory.getLogger(QuotationServiceImpl.class);
 
     private static final Set<String> SORT_FIELDS =
             Set.of("createdAt", "code", "totalAmount", "status", "quoteDate", "systemSizeKw");
@@ -79,13 +103,16 @@ public class QuotationServiceImpl implements QuotationService {
     private final AuditService auditService;
     private final CodeGenerator codeGenerator;
     private final SettingsProvider settingsProvider;
+    private final QuotationHistoryService historyService;
+    private final ApprovalGuard approvalGuard;
 
     public QuotationServiceImpl(QuotationRepository quotationRepository, QuotationItemRepository itemRepository,
                                 CustomerRepository customerRepository, ProjectRepository projectRepository,
                                 ProductRepository productRepository, TenantResolver tenantResolver,
                                 PartnerRefProvider partnerRefProvider, AuditInfoMapper auditInfoMapper,
                                 AuditService auditService, CodeGenerator codeGenerator,
-                                SettingsProvider settingsProvider) {
+                                SettingsProvider settingsProvider, QuotationHistoryService historyService,
+                                ApprovalGuard approvalGuard) {
         this.quotationRepository = quotationRepository;
         this.itemRepository = itemRepository;
         this.customerRepository = customerRepository;
@@ -97,6 +124,8 @@ public class QuotationServiceImpl implements QuotationService {
         this.auditService = auditService;
         this.codeGenerator = codeGenerator;
         this.settingsProvider = settingsProvider;
+        this.historyService = historyService;
+        this.approvalGuard = approvalGuard;
     }
 
     // ---------------------------------------------------------------- read
@@ -104,19 +133,22 @@ public class QuotationServiceImpl implements QuotationService {
     @Override
     @Transactional(readOnly = true)
     public PageResponse<QuotationListItemResponseDto> list(QuotationFilterRequestDto f) {
-        Long partnerId = tenantResolver.effectivePartnerId(f.getPartnerId());
+        warnIfClientPartner(f.getPartnerId());
+        Long partnerId = tenantResolver.effectiveReadPartnerId();
         Long ownerId = tenantResolver.ownerFilter();
         Page<Quotation> page = quotationRepository.search(partnerId, ownerId, parseStatus(f.getStatus()),
                 f.getCustomerId(), f.getReferred(), f.getFromDate(), f.getToDate(), f.getSearchOrNull(),
                 f.toPageable("createdAt,desc", SORT_FIELDS));
-        ListLookup lookup = listLookup(page.getContent());
+        ListLookup lookup = listLookup(page.getContent(), partnerId);
+        log.debug("[QUOTATION] list partnerId={} rows={} total={}", partnerId, page.getNumberOfElements(), page.getTotalElements());
         return PageResponse.of(page.map(q -> toListItem(q, lookup)));
     }
 
     @Override
     @Transactional(readOnly = true)
     public QuotationSummaryResponseDto summary(Long requestedPartnerId) {
-        Long partnerId = tenantResolver.effectivePartnerId(requestedPartnerId);
+        warnIfClientPartner(requestedPartnerId);
+        Long partnerId = tenantResolver.effectiveReadPartnerId();
         Long ownerId = tenantResolver.ownerFilter();
         QuotationSummaryResponseDto s = new QuotationSummaryResponseDto();
         s.setTotal(quotationRepository.countFiltered(partnerId, ownerId, null));
@@ -131,15 +163,15 @@ public class QuotationServiceImpl implements QuotationService {
     @Override
     @Transactional(readOnly = true)
     public QuotationResponseDto get(Long id) {
-        Quotation q = findQuotation(id);
-        return toResponse(q, itemRepository.findByQuotationIdOrderBySortOrderAsc(q.getId()));
+        Quotation q = findForRead(id);
+        return toResponse(q, itemsOf(q));
     }
 
     @Override
     @Transactional(readOnly = true)
-    public List<AuditLogResponseDto> history(Long id) {
-        Quotation q = findQuotation(id);                 // 404 if it is not visible to the caller
-        return auditService.entityHistory("Quotation", q.getId());
+    public List<QuotationHistoryDto> history(Long id) {
+        Quotation q = findForRead(id);                   // 404 if it is not visible to the caller
+        return historyService.list(q.getId(), q.getChannelPartnerId());
     }
 
     // ---------------------------------------------------------------- write
@@ -153,15 +185,15 @@ public class QuotationServiceImpl implements QuotationService {
         q.setCustomerId(customer.getId());
         q.setQuoteDate(LocalDate.now(IST));
         q.setStatus(QuotationStatus.PENDING);
-        List<QuotationItem> items = apply(q, req, customer, true);
+        List<QuotationItem> items = applyLogged(q, req, customer, true);
         return toResponse(q, items);
     }
 
     @Override
     @Transactional
     public QuotationResponseDto create(QuotationRequestDto req) {
-        // The customer decides the partner: a partner user can only pick a customer of their own partner,
-        // Super Admin can pick any customer and the quotation then belongs to that customer's partner.
+        // The customer decides the partner, and findCustomerForCaller only finds customers of the caller's OWN tenant
+        // (Super Admin: the PLATFORM tenant), so a quotation is always created under the caller's own partner.
         Customer customer = findCustomerForCaller(req.getCustomerId());
         Long partnerId = customer.getChannelPartnerId();
 
@@ -170,28 +202,37 @@ public class QuotationServiceImpl implements QuotationService {
         q.setCustomerId(customer.getId());
         q.setQuoteDate(LocalDate.now(IST));
         q.setStatus(QuotationStatus.PENDING);
-        List<QuotationItem> items = apply(q, req, customer, false);
+        List<QuotationItem> items = applyLogged(q, req, customer, false);
         q.setCode(codeGenerator.next(codePrefix(partnerId), partnerId));
         Quotation saved = quotationRepository.save(q);
 
         saveItems(saved, items);
 
+        Map<String, Object> after = snapshot(saved, items);
         auditService.record(AuditAction.CREATE, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
-                partnerId, DiffUtil.diff(null, snapshot(saved, items)));
+                partnerId, null, after);
+        historyService.recordCreated(partnerId, saved.getId(), saved.getCode(), after);
+        log.info("[QUOTATION] created id={} code={} partnerId={} status={} items={} {}",
+                saved.getId(), saved.getCode(), partnerId, saved.getStatus(), items.size(), Actors.describe());
         return toResponse(saved, items);
     }
 
     @Override
     @Transactional
     public QuotationResponseDto update(Long id, QuotationRequestDto req) {
-        Quotation q = findQuotation(id);
+        Quotation q = findForWrite(id);
         if (q.getStatus() != QuotationStatus.PENDING) {
+            log.warn("[QUOTATION] update refused, not pending id={} status={} partnerId={}",
+                    id, q.getStatus(), q.getChannelPartnerId());
             throw new BusinessException("BUSINESS_RULE", "Only a pending quotation can be edited");
         }
+        // previous values are taken BEFORE anything on the quotation (customer included) is changed
+        List<QuotationItem> oldItems = itemsOf(q);
+        Map<String, Object> before = snapshot(q, oldItems);
+
         Customer customer;
         if (q.getCustomerId().equals(req.getCustomerId())) {
-            customer = customerRepository.findById(q.getCustomerId())
-                    .orElseThrow(() -> new BusinessException("VALIDATION_ERROR", "Customer not found"));
+            customer = customerOf(q).orElseThrow(() -> new BusinessException("VALIDATION_ERROR", "Customer not found"));
         } else {
             // the new customer must belong to the SAME partner as the quotation
             customer = customerRepository.findOne(req.getCustomerId(), q.getChannelPartnerId(),
@@ -200,47 +241,92 @@ public class QuotationServiceImpl implements QuotationService {
             q.setCustomerId(customer.getId());
         }
 
-        List<QuotationItem> oldItems = itemRepository.findByQuotationIdOrderBySortOrderAsc(q.getId());
-        Map<String, Object> before = snapshot(q, oldItems);
-
-        List<QuotationItem> items = apply(q, req, customer, false);
+        List<QuotationItem> items = applyLogged(q, req, customer, false);
         Quotation saved = quotationRepository.save(q);
 
-        itemRepository.deleteByQuotationId(saved.getId());
+        itemRepository.deleteForQuotation(saved.getId(), saved.getChannelPartnerId());
         saveItems(saved, items);
 
-        auditService.record(AuditAction.UPDATE, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved, items)));
+        Map<String, Object> after = snapshot(saved, items);
+        List<Map<String, String>> changes = DiffUtil.diff(before, after);
+        if (changes.isEmpty()) {
+            log.info("[QUOTATION] update saved, nothing changed id={} code={} partnerId={}",
+                    saved.getId(), saved.getCode(), saved.getChannelPartnerId());
+        } else {
+            auditService.record(AuditAction.UPDATE, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
+                    saved.getChannelPartnerId(), before, after);
+            historyService.recordUpdated(saved.getChannelPartnerId(), saved.getId(), saved.getCode(), before, after);
+            log.info("[QUOTATION] updated id={} code={} partnerId={} changedFields={} {}",
+                    saved.getId(), saved.getCode(), saved.getChannelPartnerId(), changes.size(), Actors.describe());
+        }
         return toResponse(saved, items);
     }
 
     @Override
     @Transactional
     public QuotationResponseDto updateStatus(Long id, QuotationStatusRequestDto req) {
-        Quotation q = findQuotation(id);
-        List<QuotationItem> items = itemRepository.findByQuotationIdOrderBySortOrderAsc(q.getId());
-        Map<String, Object> before = snapshot(q, items);
+        approvalGuard.assertMayApprove(id);              // APPROVAL:EDIT, before anything is loaded
+        Quotation q = findForWrite(id);                  // own tenant only: another partner's quotation is a 404
+        List<QuotationItem> items = itemsOf(q);
 
         QuotationStatus next = QuotationStatus.valueOf(req.getStatus());
+        QuotationStatus previous = q.getStatus();
+        if (previous == next) {
+            log.debug("[QUOTATION] status unchanged id={} status={}", id, next);
+            return toResponse(q, items);
+        }
+        approvalGuard.assertMayDecide(q.getId(), q.getCreatedBy(), q.getChannelPartnerId(), previous, next);
+        Map<String, Object> before = snapshot(q, items);
+
         q.setStatus(next);
         // A referred quotation that gets accepted becomes a payable referral request (Channel Partner module approves it)
         if (next == QuotationStatus.ACCEPTED && q.isReferred() && q.getReferralStatus() == null) {
             q.setReferralStatus(ReferralStatus.PENDING);
         }
-        // Approved/accepted quotation without a project yet -> open the project (PLANNING) and link it
+        // Approved/accepted quotation without a project yet -> open the project (PLANNING) and link it (= "convert")
+        String projectCode = null;
         if ((next == QuotationStatus.ACCEPTED || next == QuotationStatus.APPROVED) && q.getProjectId() == null) {
-            q.setProjectId(createProjectFromQuotation(q).getId());
+            Project project = createProjectFromQuotation(q);
+            q.setProjectId(project.getId());
+            projectCode = project.getCode();
         }
         Quotation saved = quotationRepository.save(q);
+        Long partnerId = saved.getChannelPartnerId();
+        Map<String, Object> after = snapshot(saved, items);
 
-        auditService.record(AuditAction.STATUS_CHANGE, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved, items)));
+        // ACCEPTED / APPROVED = approve, REJECTED = reject, anything else (back to pending, expired, paid) = status change
+        AuditAction action = next == QuotationStatus.REJECTED ? AuditAction.REJECT
+                : (next == QuotationStatus.ACCEPTED || next == QuotationStatus.APPROVED) ? AuditAction.APPROVE
+                : AuditAction.STATUS_CHANGE;
+        auditService.record(action, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
+                partnerId, before, after);
+        historyService.recordStatusChanged(partnerId, saved.getId(), saved.getCode(),
+                previous.name(), next.name(), after);
+
+        if (projectCode != null) {
+            Map<String, Object> noProject = new LinkedHashMap<>();
+            noProject.put("project", null);
+            Map<String, Object> withProject = new LinkedHashMap<>();
+            withProject.put("project", projectCode);
+            auditService.record(AuditAction.CONVERT, "QUOTATION", "Quotation", saved.getId(), saved.getCode(),
+                    partnerId, noProject, withProject);
+            historyService.recordConverted(partnerId, saved.getId(), saved.getCode(), "project " + projectCode, after);
+            log.info("[QUOTATION] converted id={} code={} partnerId={} project={}",
+                    saved.getId(), saved.getCode(), partnerId, projectCode);
+        }
+        log.info("[QUOTATION] status id={} code={} partnerId={} {} -> {} {}",
+                saved.getId(), saved.getCode(), partnerId, previous, next, Actors.describe());
+        if (action != AuditAction.STATUS_CHANGE) {
+            log.info("[APPROVAL] {} quotationId={} code={} partnerId={} {} -> {} {}",
+                    action == AuditAction.APPROVE ? "approved" : "rejected",
+                    saved.getId(), saved.getCode(), partnerId, previous, next, Actors.describe());
+        }
         return toResponse(saved, items);
     }
 
     /** Builds the project for an accepted quotation from the quotation + customer data (idempotent: caller checks projectId). */
     private Project createProjectFromQuotation(Quotation q) {
-        Customer c = customerRepository.findById(q.getCustomerId())
+        Customer c = customerOf(q)
                 .orElseThrow(() -> new BusinessException("VALIDATION_ERROR", "Customer not found"));
         Long partnerId = q.getChannelPartnerId();
         BigDecimal kw = q.getSystemSizeKw().setScale(2, RoundingMode.HALF_UP);
@@ -269,35 +355,113 @@ public class QuotationServiceImpl implements QuotationService {
         after.put("status", saved.getStatus().name());
         after.put("sourceQuotation", q.getCode());
         auditService.record(AuditAction.CREATE, "PROJECT", "Project", saved.getId(), saved.getCode(),
-                partnerId, DiffUtil.diff(null, after));
+                partnerId, null, after);
         return saved;
     }
 
     @Override
     @Transactional
     public void delete(Long id) {
-        Quotation q = findQuotation(id);
+        Quotation q = findForWrite(id);
         if (q.getStatus() == QuotationStatus.ACCEPTED) {
+            log.warn("[QUOTATION] delete refused, accepted id={} partnerId={}", id, q.getChannelPartnerId());
             throw new BusinessException("BUSINESS_RULE", "An accepted quotation cannot be deleted");
         }
         String code = q.getCode();
         Long partnerId = q.getChannelPartnerId();
+        Map<String, Object> before = snapshot(q, itemsOf(q));     // the previous data stays in the audit row
         q.setDeleted(true);
         quotationRepository.save(q);
-        auditService.record(AuditAction.DELETE, "QUOTATION", "Quotation", id, code, partnerId, null);
+        auditService.record(AuditAction.DELETE, "QUOTATION", "Quotation", id, code, partnerId, before, null);
+        historyService.recordDeleted(partnerId, id, code, before);
+        log.info("[QUOTATION] deleted id={} code={} partnerId={} {}", id, code, partnerId, Actors.describe());
     }
 
     // ---------------------------------------------------------------- helpers
 
-    private Quotation findQuotation(Long id) {
-        return quotationRepository.findOne(id, tenantResolver.effectivePartnerId(null), tenantResolver.ownerFilter())
+    /** GET: own tenant, or the viewed partner for Super Admin; data scope OWN applies. */
+    private Quotation findForRead(Long id) {
+        return quotationRepository.findOne(id, tenantResolver.effectiveReadPartnerId(), tenantResolver.ownerFilter())
                 .orElseThrow(() -> new ResourceNotFoundException("Quotation not found"));
+    }
+
+    /**
+     * Writes: loads by id (data scope OWN still applies), then refuses anything outside the own tenant.
+     * A quotation of another tenant looks exactly like a missing one (404) and TenantResolver logs it at WARN.
+     */
+    private Quotation findForWrite(Long id) {
+        Quotation q = quotationRepository.findOne(id, null, tenantResolver.ownerFilter())
+                .orElseThrow(() -> new ResourceNotFoundException("Quotation not found"));
+        tenantResolver.assertWritable(q.getChannelPartnerId(), "Quotation", id);
+        return q;
+    }
+
+    /** The only way items are read: through a quotation that has already passed the tenant check. */
+    private List<QuotationItem> itemsOf(Quotation q) {
+        return itemRepository.findForQuotation(q.getId(), q.getChannelPartnerId());
+    }
+
+    /** The quotation's customer, only if it belongs to the quotation's own partner. */
+    private java.util.Optional<Customer> customerOf(Quotation q) {
+        return customerRepository.findById(q.getCustomerId())
+                .filter(c -> q.getChannelPartnerId() != null && q.getChannelPartnerId().equals(c.getChannelPartnerId()));
     }
 
     private Customer findCustomerForCaller(Long customerId) {
         return customerRepository.findOne(customerId, tenantResolver.effectivePartnerId(null),
                         tenantResolver.ownerFilter())
                 .orElseThrow(() -> new BusinessException("VALIDATION_ERROR", "Customer not found"));
+    }
+
+    private void warnIfClientPartner(Long requested) {
+        if (requested != null && !requested.equals(tenantResolver.ownPartnerId())) {
+            log.warn("[QUOTATION] client partnerId ignored (a Super Admin views a partner with viewPartnerId on a GET) "
+                    + "requestedPartnerId={} {}", requested, Actors.describe());
+        }
+    }
+
+    /** apply(..) with the calculation inputs logged at WARN when it fails. */
+    private List<QuotationItem> applyLogged(Quotation q, QuotationRequestDto req, Customer customer, boolean preview) {
+        try {
+            return apply(q, req, customer, preview);
+        } catch (BusinessException ex) {
+            log.warn("[QUOTATION] calculation rejected quotationId={} partnerId={} preview={} rule={} inputs={}",
+                    q.getId(), q.getChannelPartnerId(), preview, safeReason(ex), calcInputs(req));
+            throw ex;
+        } catch (RuntimeException ex) {
+            log.warn("[QUOTATION] calculation failed quotationId={} partnerId={} preview={} error={} inputs={}",
+                    q.getId(), q.getChannelPartnerId(), preview, ex.getClass().getSimpleName(), calcInputs(req));
+            throw ex;
+        }
+    }
+
+    /** error code + message, cut at the first ':' (the only message that carries client text is "Product not found: <name>"). */
+    private static String safeReason(BusinessException ex) {
+        String m = ex.getMessage() == null ? "" : ex.getMessage();
+        int colon = m.indexOf(':');
+        return ex.getErrorCode() + " / " + (colon > 0 ? m.substring(0, colon) : m);
+    }
+
+    /** Numbers only: no names, mobiles, e-mails, addresses, terms or bank details. */
+    private static String calcInputs(QuotationRequestDto r) {
+        if (r == null) return "none";
+        StringBuilder lines = new StringBuilder();
+        int n = 0;
+        if (r.getItems() != null) {
+            for (QuotationItemRequestDto it : r.getItems()) {
+                if (n++ == 20) { lines.append(",..."); break; }
+                if (lines.length() > 0) lines.append(',');
+                lines.append(it.getQty()).append('x').append(it.getRate());
+            }
+        }
+        return "sizeKw=" + r.getSystemSizeKw()
+                + " itemCount=" + (r.getItems() == null ? 0 : r.getItems().size())
+                + " lines(qtyxrate)=[" + lines + "]"
+                + " installation=" + r.getInstallationCost() + " transport=" + r.getTransportCost()
+                + " other=" + r.getOtherCost() + " gstPercent=" + r.getGstPercent()
+                + " discount=" + r.getDiscountType() + ":" + r.getDiscountValue()
+                + " advance=" + r.getAdvance() + " tariff=" + r.getTariff()
+                + " escalation=" + r.getEscalationPercent();
     }
 
     private String codePrefix(Long partnerId) {
@@ -536,6 +700,7 @@ public class QuotationServiceImpl implements QuotationService {
     private Map<String, Object> snapshot(Quotation q, List<QuotationItem> items) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("customerId", q.getCustomerId() == null ? null : q.getCustomerId().toString());
+        m.put("projectId", q.getProjectId() == null ? null : q.getProjectId().toString());
         m.put("status", q.getStatus().name());
         m.put("validUntil", q.getValidUntil() == null ? null : q.getValidUntil().toString());
         m.put("systemSizeKw", plain(q.getSystemSizeKw()));
@@ -561,6 +726,12 @@ public class QuotationServiceImpl implements QuotationService {
         m.put("escalationPercent", plain(q.getEscalationPercent()));
         m.put("referredBy", q.isReferred() ? q.getReferredBy() : null);
         m.put("referralPercent", plain(q.getReferralPercent()));
+        m.put("referralAmount", plain(q.getReferralAmount()));
+        m.put("referralStatus", q.getReferralStatus() == null ? null : q.getReferralStatus().name());
+        m.put("payAdvancePct", plain(q.getPayAdvancePct()));
+        m.put("payMaterialPct", plain(q.getPayMaterialPct()));
+        m.put("payInstallationPct", plain(q.getPayInstallationPct()));
+        m.put("payBalancePct", plain(q.getPayBalancePct()));
         m.put("terms", q.getTerms());
         return m;
     }
@@ -577,7 +748,7 @@ public class QuotationServiceImpl implements QuotationService {
         private final Map<Long, CustomerRefResponseDto> customers = new HashMap<>();
     }
 
-    private ListLookup listLookup(List<Quotation> rows) {
+    private ListLookup listLookup(List<Quotation> rows, Long partnerId) {
         ListLookup lk = new ListLookup();
         if (rows.isEmpty()) {
             return lk;
@@ -591,7 +762,9 @@ public class QuotationServiceImpl implements QuotationService {
         lk.partners = partnerRefProvider.refs(partnerIds);
         lk.names = auditInfoMapper.namesFor(rows);
         for (Customer c : customerRepository.findAllById(customerIds)) {
-            lk.customers.put(c.getId(), new CustomerRefResponseDto(c.getId(), c.getCode(), c.getName()));
+            if (partnerId.equals(c.getChannelPartnerId())) {           // never name a customer of another tenant
+                lk.customers.put(c.getId(), new CustomerRefResponseDto(c.getId(), c.getCode(), c.getName()));
+            }
         }
         return lk;
     }
@@ -625,7 +798,7 @@ public class QuotationServiceImpl implements QuotationService {
         d.setSystemSizeKw(q.getSystemSizeKw());
         d.setMounting(q.getMounting());
 
-        Customer c = customerRepository.findById(q.getCustomerId()).orElse(null);
+        Customer c = customerOf(q).orElse(null);
         if (c != null) {
             QuotationResponseDto.CustomerBlock cb = new QuotationResponseDto.CustomerBlock();
             cb.setId(c.getId());

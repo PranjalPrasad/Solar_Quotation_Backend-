@@ -19,15 +19,18 @@ public interface ReferralRepository extends JpaRepository<Referral, Long> {
 
     @Query("select r from Referral r where r.id = :id and r.deleted = false "
             + "and (:ownerPartnerId is null or r.channelPartnerId = :ownerPartnerId) "
-            + "and (:referrerPartnerId is null or r.referrerPartnerId = :referrerPartnerId)")
+            + "and (:referrerPartnerId is null or r.referrerPartnerId = :referrerPartnerId) "
+            + "and (:viewerPartnerId is null or r.channelPartnerId = :viewerPartnerId or r.referrerPartnerId = :viewerPartnerId)")
     Optional<Referral> findOne(@Param("id") Long id,
                                @Param("ownerPartnerId") Long ownerPartnerId,
-                               @Param("referrerPartnerId") Long referrerPartnerId);
+                               @Param("referrerPartnerId") Long referrerPartnerId,
+                               @Param("viewerPartnerId") Long viewerPartnerId);
 
     /** searchCustomer is false for partner users, so they cannot probe the customers of another partner. */
     @Query("select r from Referral r where r.deleted = false "
             + "and (:ownerPartnerId is null or r.channelPartnerId = :ownerPartnerId) "
             + "and (:referrerPartnerId is null or r.referrerPartnerId = :referrerPartnerId) "
+            + "and (:viewerPartnerId is null or r.channelPartnerId = :viewerPartnerId or r.referrerPartnerId = :viewerPartnerId) "
             + "and (:status is null or r.status = :status) "
             + "and r.quoteDate >= :fromDate and r.quoteDate <= :toDate "
             + "and (:search is null or lower(r.code) like lower(concat('%', :search, '%')) "
@@ -37,6 +40,7 @@ public interface ReferralRepository extends JpaRepository<Referral, Long> {
             + "                         where lower(c.name) like lower(concat('%', :search, '%')))))")
     Page<Referral> search(@Param("ownerPartnerId") Long ownerPartnerId,
                           @Param("referrerPartnerId") Long referrerPartnerId,
+                          @Param("viewerPartnerId") Long viewerPartnerId,
                           @Param("status") ReferralStatus status,
                           @Param("fromDate") LocalDate fromDate,
                           @Param("toDate") LocalDate toDate,
@@ -65,6 +69,8 @@ public interface ReferralRepository extends JpaRepository<Referral, Long> {
     /** Rows of [referrerPartnerId, status, count, sum(referralAmount)] for the partner list column. */
     @Query("select r.referrerPartnerId, r.status, count(r), coalesce(sum(r.referralAmount), 0) from Referral r "
             + "where r.deleted = false and r.referrerPartnerId in :partnerIds "
+            + "and (:ownerPartnerId is null or r.channelPartnerId = :ownerPartnerId) "
             + "group by r.referrerPartnerId, r.status")
-    List<Object[]> totalsByReferrer(@Param("partnerIds") Collection<Long> partnerIds);
+    List<Object[]> totalsByReferrer(@Param("ownerPartnerId") Long ownerPartnerId,
+                                    @Param("partnerIds") Collection<Long> partnerIds);
 }

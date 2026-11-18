@@ -30,7 +30,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/** SETTINGS is a platform-only module, so everything here except /public is Super Admin only. */
+/**
+ * Settings are PER TENANT: every call reads and writes the caller's OWN partner's settings (a partner id is never taken
+ * from the request). SETTINGS:VIEW / SETTINGS:EDIT are required (also re-checked in SettingsServiceImpl); today only the
+ * Super Admin role holds them, so that is who edits the PLATFORM tenant's settings. See SETTINGS.md.
+ */
 @RestController
 @RequestMapping("/api/settings")
 public class SettingsController {

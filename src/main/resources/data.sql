@@ -1,8 +1,12 @@
 -- =====================================================================
 -- Solar CRM seed data. Idempotent: every INSERT is guarded by NOT EXISTS, safe to run on every start.
+-- Roles, modules, permissions and the PLATFORM tenant ONLY. NO USERS are seeded here.
+-- The first Super Admin is created by AdminBootstrapRunner from the environment
+-- (BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD, see .env.example).
 -- Module codes map to the frontend sidebar keys (QUOTATION -> quotation, USER -> user_management ...)
 -- and routes are the real frontend page paths. Route NULL = no frontend page (hidden from sidebar).
--- First login:  pranjalprasad459@gmail.com  /  admin@123   (change it after the first login)
+-- Platform-only modules (CHANNEL_PARTNER, AUDIT, ROLE) belong to SUPER_ADMIN only: the backend refuses to grant
+-- them to any other role, and this file removes any such grant that exists from older data.
 -- Grants follow the frontend's role menus:
 --   SUPER_ADMIN            : every module
 --   CHANNEL_PARTNER_ADMIN  : dashboard, quotation, product, customer, reports, project, calculator, approval
@@ -70,7 +74,7 @@ SELECT 'SETTINGS', 'Settings', '/settings/settings.html', 0, 11, 0, 0, UTC_TIMES
 WHERE NOT EXISTS (SELECT 1 FROM module WHERE code = 'SETTINGS');
 
 INSERT INTO module (code, name, route, platform_only, sort_order, deleted, version, created_at)
-SELECT 'ROLE', 'Roles & Permissions', NULL, 0, 12, 0, 0, UTC_TIMESTAMP()
+SELECT 'ROLE', 'Roles & Permissions', NULL, 1, 12, 0, 0, UTC_TIMESTAMP()
 WHERE NOT EXISTS (SELECT 1 FROM module WHERE code = 'ROLE');
 
 INSERT INTO module (code, name, route, platform_only, sort_order, deleted, version, created_at)
@@ -79,6 +83,9 @@ WHERE NOT EXISTS (SELECT 1 FROM module WHERE code = 'AUDIT');
 
 -- existing databases: the row above was seeded earlier with no route, so the sidebar link never appeared
 UPDATE module SET route = '/audit/audit.html' WHERE code = 'AUDIT' AND route IS NULL;
+
+-- existing databases: ROLE used to be seeded as a normal module. Platform-only modules can never be granted to partner roles.
+UPDATE module SET platform_only = 1 WHERE code IN ('CHANNEL_PARTNER', 'AUDIT', 'ROLE');
 
 INSERT INTO permission (module_id, action, code, deleted, version, created_at)
 SELECT m.id, 'VIEW', 'DASHBOARD:VIEW', 0, 0, UTC_TIMESTAMP() FROM module m
@@ -232,6 +239,13 @@ INSERT INTO permission (module_id, action, code, deleted, version, created_at)
 SELECT m.id, 'EXPORT', 'AUDIT:EXPORT', 0, 0, UTC_TIMESTAMP() FROM module m
 WHERE m.code = 'AUDIT' AND NOT EXISTS (SELECT 1 FROM permission WHERE code = 'AUDIT:EXPORT');
 
+-- Cleanup: no role except SUPER_ADMIN may hold a platform-only permission (e.g. ROLE:EDIT on CHANNEL_PARTNER_ADMIN).
+DELETE rp FROM role_permission rp
+JOIN permission p ON p.id = rp.permission_id
+JOIN module m ON m.id = p.module_id
+JOIN role r ON r.id = rp.role_id
+WHERE m.platform_only = 1 AND r.code <> 'SUPER_ADMIN';
+
 -- SUPER_ADMIN: every permission
 INSERT INTO role_permission (role_id, permission_id, deleted, version, created_at)
 SELECT r.id, p.id, 0, 0, UTC_TIMESTAMP() FROM role r, permission p
@@ -251,10 +265,4 @@ WHERE r.code = 'CHANNEL_PARTNER_SALES' AND p.module_id = m.id AND m.code IN ('DA
   AND p.action IN ('VIEW','CREATE','EDIT')
   AND NOT EXISTS (SELECT 1 FROM role_permission rp WHERE rp.role_id = r.id AND rp.permission_id = p.id);
 
--- First Super Admin (PLATFORM tenant). Password: admin@123 (BCrypt)
-INSERT INTO app_user (code, name, email, username, password_hash, status, role_id, must_change_password,
-                      channel_partner_id, deleted, version, created_at)
-SELECT 'USR-0001', 'Admin', 'pranjalprasad459@gmail.com', 'admin', '$2a$10$jBdQPzuwEXJe1PeKvpXyeuqOzH2hG8/VPQIVdSJ2BUlcd0Wicsnza', 'ACTIVE', r.id, 0, cp.id, 0, 0, UTC_TIMESTAMP()
-FROM role r, channel_partner cp
-WHERE r.code = 'SUPER_ADMIN' AND cp.code = 'PLATFORM'
-  AND NOT EXISTS (SELECT 1 FROM app_user WHERE username = 'admin' OR email = 'pranjalprasad459@gmail.com');
+-- (No app_user insert: see AdminBootstrapRunner.)

@@ -5,7 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
-/** Create and update. partnerId is read only for SUPER_ADMIN on create (required there); ignored for everybody else. */
+/** Create and update. The owner is ALWAYS the caller's own tenant; the legacy partnerId below is never read. */
 public class CustomerRequestDto {
 
     @NotBlank(message = "Name is required")
@@ -48,6 +48,8 @@ public class CustomerRequestDto {
     @Pattern(regexp = "ACTIVE|INACTIVE", message = "Status must be ACTIVE or INACTIVE")
     private String status;
 
+    /** @deprecated ignored by the service (logged at WARN when sent). Kept so old clients and tests still bind. */
+    @Deprecated
     private Long partnerId;
 
     public String getName() { return name; }
@@ -74,6 +76,6 @@ public class CustomerRequestDto {
     public void setConsumerCategory(String consumerCategory) { this.consumerCategory = consumerCategory; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
-    public Long getPartnerId() { return partnerId; }
-    public void setPartnerId(Long partnerId) { this.partnerId = partnerId; }
+    @Deprecated public Long getPartnerId() { return partnerId; }
+    @Deprecated public void setPartnerId(Long partnerId) { this.partnerId = partnerId; }
 }

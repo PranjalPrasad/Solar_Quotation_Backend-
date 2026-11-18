@@ -28,4 +28,19 @@ public final class DiffUtil {
         }
         return out;
     }
+
+    /** For deletes: every non-null old value with new = null, so the audit row keeps the previous data. */
+    public static List<Map<String, String>> removed(Map<String, Object> before) {
+        List<Map<String, String>> out = new ArrayList<>();
+        if (before == null) return out;
+        for (Map.Entry<String, Object> e : before.entrySet()) {
+            if (SENSITIVE.contains(e.getKey()) || e.getValue() == null) continue;
+            Map<String, String> row = new LinkedHashMap<>();
+            row.put("field", e.getKey());
+            row.put("old", String.valueOf(e.getValue()));
+            row.put("new", null);
+            out.add(row);
+        }
+        return out;
+    }
 }

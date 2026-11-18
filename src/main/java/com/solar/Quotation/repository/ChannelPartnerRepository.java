@@ -40,4 +40,8 @@ public interface ChannelPartnerRepository extends JpaRepository<ChannelPartner, 
 
     @Query("select cp.id, cp.name, cp.code from ChannelPartner cp where cp.deleted = false and cp.id in :ids")
     java.util.List<Object[]> findBasicByIds(@Param("ids") java.util.List<Long> ids);
+
+    /** Id(s) of partners of one type, lowest id first. Used to find the PLATFORM tenant. */
+    @Query("select p.id from ChannelPartner p where p.deleted = false and p.partnerType = :type order by p.id")
+    java.util.List<Long> findIdsByType(@Param("type") PartnerType type, Pageable pageable);
 }

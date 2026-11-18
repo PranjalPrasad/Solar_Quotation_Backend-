@@ -2,7 +2,6 @@ package com.solar.Quotation.service.serviceImpl;
 
 import com.solar.Quotation.Enum.AuditAction;
 import com.solar.Quotation.Enum.DataScope;
-import com.solar.Quotation.Enum.PartnerType;
 import com.solar.Quotation.Enum.RecordStatus;
 import com.solar.Quotation.dto.requestdto.AdminResetPasswordRequestDto;
 import com.solar.Quotation.dto.requestdto.UserFilterRequestDto;
@@ -20,6 +19,7 @@ import com.solar.Quotation.exception.BusinessException;
 import com.solar.Quotation.exception.ResourceNotFoundException;
 import com.solar.Quotation.repository.AppUserRepository;
 import com.solar.Quotation.repository.ChannelPartnerRepository;
+import com.solar.Quotation.repository.PartnerAllowedRoleRepository;
 import com.solar.Quotation.repository.RefreshTokenRepository;
 import com.solar.Quotation.repository.RoleRepository;
 import com.solar.Quotation.security.TenantContext;
@@ -30,13 +30,18 @@ import com.solar.Quotation.service.UserService;
 import com.solar.Quotation.util.AuditInfoMapper;
 import com.solar.Quotation.util.CodeGenerator;
 import com.solar.Quotation.util.DiffUtil;
-import com.solar.Quotation.util.TokenUtil;
+import com.solar.Quotation.util.UserPasswordPolicy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.solar.Quotation.util.FileReferenceGuard;
+import java.text.Normalizer;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -44,45 +49,52 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 @Service
 public class UserServiceImpl implements UserService {
+
+    private static final Logger log = LoggerFactory.getLogger(UserServiceImpl.class);
 
     private static final Set<String> SORT_FIELDS = Set.of("createdAt", "name", "username", "status");
     private static final String SUPER_ADMIN = "SUPER_ADMIN";
     private static final String PARTNER_ADMIN = "CHANNEL_PARTNER_ADMIN";
     private static final String PARTNER_SALES = "CHANNEL_PARTNER_SALES";
-    private static final Pattern PASSWORD_RULE = Pattern.compile("^(?=.*[A-Za-z])(?=.*\\d).{8,100}$");
+
+    /** Keys whose value must never reach the audit trail. Compared in lower case. */
+    private static final Set<String> MASK_KEYS =
+            Set.of("password", "passwordhash", "newpassword", "temporarypassword", "token");
 
     private final AppUserRepository userRepository;
     private final RoleRepository roleRepository;
     private final ChannelPartnerRepository partnerRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final PartnerAllowedRoleRepository allowedRoles;
     private final TenantResolver tenantResolver;
     private final PartnerRefProvider partnerRefProvider;
     private final AuditInfoMapper auditInfoMapper;
     private final AuditService auditService;
     private final CodeGenerator codeGenerator;
     private final PasswordEncoder passwordEncoder;
-    private final TokenUtil tokenUtil;
+    private final UserPasswordPolicy passwordPolicy;
 
     public UserServiceImpl(AppUserRepository userRepository, RoleRepository roleRepository,
                            ChannelPartnerRepository partnerRepository, RefreshTokenRepository refreshTokenRepository,
-                           TenantResolver tenantResolver, PartnerRefProvider partnerRefProvider,
-                           AuditInfoMapper auditInfoMapper, AuditService auditService, CodeGenerator codeGenerator,
-                           PasswordEncoder passwordEncoder, TokenUtil tokenUtil) {
+                           PartnerAllowedRoleRepository allowedRoles, TenantResolver tenantResolver,
+                           PartnerRefProvider partnerRefProvider, AuditInfoMapper auditInfoMapper,
+                           AuditService auditService, CodeGenerator codeGenerator,
+                           PasswordEncoder passwordEncoder, UserPasswordPolicy passwordPolicy) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.partnerRepository = partnerRepository;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.allowedRoles = allowedRoles;
         this.tenantResolver = tenantResolver;
         this.partnerRefProvider = partnerRefProvider;
         this.auditInfoMapper = auditInfoMapper;
         this.auditService = auditService;
         this.codeGenerator = codeGenerator;
         this.passwordEncoder = passwordEncoder;
-        this.tokenUtil = tokenUtil;
+        this.passwordPolicy = passwordPolicy;
     }
 
     // ---------------------------------------------------------------- read
@@ -122,11 +134,17 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<RoleRefResponseDto> roleOptions() {
-        boolean superAdmin = TenantContext.get().isSuperAdmin();
+    public List<RoleRefResponseDto> roleOptions(Long requestedPartnerId) {
+        // For a partner user this is always their own partner; the client value is ignored.
+        Long partnerId = tenantResolver.effectivePartnerId(requestedPartnerId);
+        if (partnerId == null) {
+            partnerId = TenantContext.get().getPartnerId();       // Super Admin, nothing chosen: PLATFORM tenant
+        }
+        Set<Long> allowed = new HashSet<>(allowedRoles.findRoleIds(partnerId));
         return roleRepository.findByDeletedFalseOrderByIdAsc().stream()
                 .filter(r -> r.getStatus() == RecordStatus.ACTIVE)
-                .filter(r -> superAdmin || r.getDataScope() != DataScope.ALL)
+                .filter(r -> r.getDataScope() != DataScope.ALL)
+                .filter(r -> allowed.contains(r.getId()))
                 .map(this::roleRef)
                 .toList();
     }
@@ -136,6 +154,7 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public UserResponseDto create(UserRequestDto req) {
+        // partnerId from the client is only honoured for Super Admin; a partner user always gets their own.
         Long partnerId = tenantResolver.requirePartnerIdForCreate(req.getPartnerId());
         ChannelPartner partner = partnerRepository.findByIdAndDeletedFalse(partnerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Channel partner not found"));
@@ -143,12 +162,19 @@ public class UserServiceImpl implements UserService {
                 .orElseThrow(() -> new BusinessException("VALIDATION_ERROR", "Role not found"));
         assertRoleAllowed(role, partner);
 
-        String username = req.getUsername().trim();
         String email = req.getEmail().trim();
+        String username = (req.getUsername() == null || req.getUsername().isBlank())
+                ? generateUsername(req.getName(), email)
+                : req.getUsername().trim();
         assertUnique(username, email);
 
         boolean generated = req.getPassword() == null || req.getPassword().isBlank();
-        String rawPassword = generated ? tokenUtil.generateTemporaryPassword() : validatedPassword(req.getPassword());
+        String rawPassword = generated
+                ? passwordPolicy.generateTemporary()
+                : passwordPolicy.validate(req.getPassword(), username, email);
+
+        RecordStatus status = parseStatus(req.getStatus());
+        FileReferenceGuard.require(req.getPhotoPath(), null, "Photo", partnerId);
 
         AppUser u = new AppUser();
         u.setChannelPartnerId(partnerId);
@@ -160,17 +186,19 @@ public class UserServiceImpl implements UserService {
         u.setPasswordHash(passwordEncoder.encode(rawPassword));
         u.setDepartment(blankToNull(req.getDepartment()));
         u.setPhotoPath(blankToNull(req.getPhotoPath()));
-        u.setStatus(parseStatus(req.getStatus()) == null ? RecordStatus.ACTIVE : parseStatus(req.getStatus()));
+        u.setStatus(status == null ? RecordStatus.ACTIVE : status);
         u.setRoleId(role.getId());
         u.setMustChangePassword(true);
         AppUser saved = userRepository.save(u);
 
         auditService.record(AuditAction.CREATE, "USER", "AppUser", saved.getId(), saved.getCode(), partnerId,
-                DiffUtil.diff(null, snapshot(saved, role)));
+                null, snapshot(saved, role));
+        log.info("[USER] create target={} code={} partner={} role={} passwordGenerated={} actor={}",
+                saved.getId(), saved.getCode(), partnerId, role.getCode(), generated, actor());
 
         UserResponseDto out = toSingleResponse(saved);
         if (generated) {
-            out.setTemporaryPassword(rawPassword);
+            out.setTemporaryPassword(rawPassword);      // returned this once, never stored in clear text
         }
         return out;
     }
@@ -198,16 +226,23 @@ public class UserServiceImpl implements UserService {
         }
 
         Map<String, Object> before = snapshot(u, oldRole);
+        FileReferenceGuard.require(req.getPhotoPath(), u.getPhotoPath(), "Photo", u.getChannelPartnerId());
+        boolean roleChanged = !oldRole.getId().equals(newRole.getId());
         u.setName(req.getName().trim());
         u.setEmail(email);
         u.setPhone(blankToNull(req.getPhone()));
         u.setDepartment(blankToNull(req.getDepartment()));
         u.setPhotoPath(blankToNull(req.getPhotoPath()));
         u.setRoleId(newRole.getId());
+        if (roleChanged) {
+            u.setTokenValidAfter(LocalDateTime.now());   // old tokens carry the old permissions
+        }
         AppUser saved = userRepository.save(u);
 
         auditService.record(AuditAction.UPDATE, "USER", "AppUser", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved, newRole)));
+                saved.getChannelPartnerId(), before, snapshot(saved, newRole));
+        log.info("[USER] update target={} partner={} roleChanged={} actor={}",
+                saved.getId(), saved.getChannelPartnerId(), roleChanged, actor());
         return toSingleResponse(saved);
     }
 
@@ -224,12 +259,18 @@ public class UserServiceImpl implements UserService {
         }
         Map<String, Object> before = snapshot(u, role);
         u.setStatus(newStatus);
+        if (newStatus == RecordStatus.INACTIVE) {
+            u.setTokenValidAfter(LocalDateTime.now());   // kill access tokens already issued
+        }
         AppUser saved = userRepository.save(u);
         if (newStatus == RecordStatus.INACTIVE) {
             refreshTokenRepository.revokeAllForUser(saved.getId());
         }
         auditService.record(AuditAction.STATUS_CHANGE, "USER", "AppUser", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved, role)));
+                saved.getChannelPartnerId(), before, snapshot(saved, role));
+        log.info("[USER] {} target={} partner={} actor={}",
+                newStatus == RecordStatus.INACTIVE ? "deactivate" : "activate",
+                saved.getId(), saved.getChannelPartnerId(), actor());
         return toSingleResponse(userRepository.findById(saved.getId()).orElse(saved));
     }
 
@@ -238,15 +279,28 @@ public class UserServiceImpl implements UserService {
     public UserResponseDto resetPassword(Long id, AdminResetPasswordRequestDto req) {
         AppUser u = findUser(id);
         boolean generated = req.getNewPassword() == null || req.getNewPassword().isBlank();
-        String rawPassword = generated ? tokenUtil.generateTemporaryPassword() : validatedPassword(req.getNewPassword());
+        String rawPassword = generated
+                ? passwordPolicy.generateTemporary()
+                : passwordPolicy.validate(req.getNewPassword(), u.getUsername(), u.getEmail());
+        boolean mustChangeBefore = u.isMustChangePassword();
 
         u.setPasswordHash(passwordEncoder.encode(rawPassword));
         u.setMustChangePassword(true);
+        u.setTokenValidAfter(LocalDateTime.now());       // access tokens of the old password stop working
         userRepository.saveAndFlush(u);
         refreshTokenRepository.revokeAllForUser(u.getId());      // all devices of that user must log in again
 
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("password", "(previous)");
+        before.put("mustChangePassword", mustChangeBefore);
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("password", "(reset)");
+        after.put("mustChangePassword", true);
+        after.put("passwordGenerated", generated);
         auditService.record(AuditAction.PASSWORD_RESET, "USER", "AppUser", u.getId(), u.getCode(),
-                u.getChannelPartnerId(), null);
+                u.getChannelPartnerId(), before, after);
+        log.info("[USER] reset-password target={} partner={} generated={} actor={}",
+                u.getId(), u.getChannelPartnerId(), generated, actor());
 
         UserResponseDto out = toSingleResponse(userRepository.findById(u.getId()).orElse(u));
         if (generated) {
@@ -263,6 +317,7 @@ public class UserServiceImpl implements UserService {
         guardNotSelf(u, "delete your own account");
         guardLastSuperAdmin(u, role);
 
+        Map<String, Object> before = snapshot(u, role);
         String code = u.getCode();
         Long partnerId = u.getChannelPartnerId();
         Long userId = u.getId();
@@ -270,32 +325,57 @@ public class UserServiceImpl implements UserService {
         u.setUsername(u.getUsername() + "~del" + u.getId());
         u.setEmail(u.getEmail() + "~del" + u.getId());
         u.setStatus(RecordStatus.INACTIVE);
+        u.setTokenValidAfter(LocalDateTime.now());
         u.setDeleted(true);
         userRepository.saveAndFlush(u);
         refreshTokenRepository.revokeAllForUser(userId);
 
-        auditService.record(AuditAction.DELETE, "USER", "AppUser", userId, code, partnerId, null);
+        auditService.record(AuditAction.DELETE, "USER", "AppUser", userId, code, partnerId,
+                before, null);
+        log.info("[USER] delete target={} partner={} actor={}", userId, partnerId, actor());
     }
 
     // ---------------------------------------------------------------- helpers
 
-    private AppUser findUser(Long id) {
-        Long partnerId = tenantResolver.effectivePartnerId(null);
-        return userRepository.findOne(id, partnerId)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+    private Long actor() {
+        return TenantContext.get().getUserId();
     }
 
-    /** A role of data scope ALL is a platform role: it can only belong to the PLATFORM partner, and the reverse. */
+    /** Replaces secret values before a map goes into the audit trail. */
+    private static Map<String, Object> masked(Map<String, Object> m) {
+        Map<String, Object> out = new LinkedHashMap<>(m);
+        out.replaceAll((k, v) -> MASK_KEYS.contains(k.toLowerCase(Locale.ROOT)) ? "********" : v);
+        return out;
+    }
+
+    /** Partner-scoped: a user of another partner is simply "not found" (404), whether it exists or not. */
+    private AppUser findUser(Long id) {
+        Long partnerId = tenantResolver.effectivePartnerId(null);
+        return userRepository.findOne(id, partnerId).orElseThrow(() -> {
+            log.warn("[USER] not-found-or-out-of-scope target={} actor={}", id, actor());
+            return new ResourceNotFoundException("User not found");
+        });
+    }
+
+    /**
+     * A role may be given inside a partner only when it is active, is not a platform-wide role (data scope ALL)
+     * and is listed in partner_allowed_role for that partner. Super Admin follows the same rule.
+     */
     private void assertRoleAllowed(Role role, ChannelPartner partner) {
         if (role.getStatus() != RecordStatus.ACTIVE) {
             throw new BusinessException("BUSINESS_RULE", "Role is not active");
         }
-        boolean platformRole = role.getDataScope() == DataScope.ALL;
-        boolean platformPartner = partner.getPartnerType() == PartnerType.PLATFORM;
-        if (platformRole != platformPartner) {
-            throw new BusinessException("BUSINESS_RULE", platformRole
-                    ? "Super Admin roles can only be given to platform users"
-                    : "Partner roles cannot be given to platform users");
+        if (role.getDataScope() == DataScope.ALL) {
+            log.warn("[USER] role-denied reason=ALL_SCOPE role={} partner={} actor={}",
+                    role.getCode(), partner.getId(), actor());
+            throw new BusinessException("BUSINESS_RULE", "Platform-wide roles cannot be assigned here",
+                    HttpStatus.FORBIDDEN);
+        }
+        if (!allowedRoles.existsByPartnerIdAndRoleId(partner.getId(), role.getId())) {
+            log.warn("[USER] role-denied reason=NOT_ALLOWED role={} partner={} actor={}",
+                    role.getCode(), partner.getId(), actor());
+            throw new BusinessException("BUSINESS_RULE", "This role is not allowed for this partner",
+                    HttpStatus.FORBIDDEN);
         }
     }
 
@@ -322,12 +402,27 @@ public class UserServiceImpl implements UserService {
         }
     }
 
-    private String validatedPassword(String raw) {
-        if (!PASSWORD_RULE.matcher(raw).matches()) {
-            throw new BusinessException("VALIDATION_ERROR",
-                    "Password must be at least 8 characters and contain a letter and a digit");
+    /** firstname.lastname, numbered when taken (rahul.mehta, rahul.mehta2, ...). */
+    private String generateUsername(String name, String email) {
+        String base = Normalizer.normalize(name == null ? "" : name, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", ".")
+                .replaceAll("^\\.+|\\.+$", "");
+        if (base.length() < 3) {
+            base = email.split("@")[0].toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._-]", "");
         }
-        return raw;
+        if (base.length() < 3) {
+            base = "user";
+        }
+        if (base.length() > 50) {
+            base = base.substring(0, 50);
+        }
+        String candidate = base;
+        for (int i = 2; userRepository.existsByUsernameIgnoreCase(candidate); i++) {
+            candidate = base + i;
+        }
+        return candidate;
     }
 
     private Long resolveRoleId(String roleCode) {
@@ -366,6 +461,8 @@ public class UserServiceImpl implements UserService {
         m.put("department", u.getDepartment());
         m.put("role", role.getCode());
         m.put("status", u.getStatus().name());
+        m.put("partnerId", u.getChannelPartnerId());
+        m.put("mustChangePassword", u.isMustChangePassword());
         return m;
     }
 

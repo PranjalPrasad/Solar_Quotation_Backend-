@@ -1,56 +1,91 @@
 package com.solar.Quotation.scheduler;
+
 import com.solar.Quotation.Enum.FollowupStatus;
+import com.solar.Quotation.Enum.RecordStatus;
 import com.solar.Quotation.repository.ReminderQueryRepository;
-import com.solar.Quotation.service.NotificationPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.PageRequest;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.UUID;
 
+/**
+ * Every morning: pending follow-ups that are due today or overdue, processed PARTNER BY PARTNER.
+ * A failure in one partner is logged with its partnerId and the job carries on with the next partner.
+ *
+ * Log lines (all start with [FOLLOWUP-JOB]):
+ *   INFO  per partner: processed count (and failed count when not 0)
+ *   ERROR per failed partner: partnerId + stack
+ *   INFO  run summary: partners ok / failed, reminders processed, duration in ms
+ */
 @Component
 public class FollowupReminderJob {
 
     private static final Logger log = LoggerFactory.getLogger(FollowupReminderJob.class);
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
-    private static final int PAGE_SIZE = 500;
 
     private final ReminderQueryRepository queries;
-    private final NotificationPublisher publisher;
+    private final FollowupReminderProcessor processor;
 
-    public FollowupReminderJob(ReminderQueryRepository queries, NotificationPublisher publisher) {
+    public FollowupReminderJob(ReminderQueryRepository queries, FollowupReminderProcessor processor) {
         this.queries = queries;
-        this.publisher = publisher;
+        this.processor = processor;
     }
 
     @Scheduled(cron = "${app.notifications.followup-cron:0 0 9 * * *}", zone = "Asia/Kolkata")
     public void run() {
-        LocalDate today = LocalDate.now(IST);
-        int page = 0;
-        int count = 0;
-        List<Object[]> rows;
-        do {
-            rows = queries.duePendingFollowups(FollowupStatus.PENDING, today, PageRequest.of(page++, PAGE_SIZE));
-            for (Object[] r : rows) {
+        runFor(LocalDate.now(IST));
+    }
+
+    /** The whole run for one business day. Public so a test (or an admin trigger later) can call it. */
+    public RunSummary runFor(LocalDate today) {
+        long started = System.nanoTime();
+        MDC.put("requestId", "followup-job-" + UUID.randomUUID().toString().substring(0, 8));
+        int partnersOk = 0;
+        int partnersFailed = 0;
+        int processed = 0;
+        try {
+            List<Long> partnerIds;
+            try {
+                partnerIds = queries.partnersWithDueFollowups(FollowupStatus.PENDING, RecordStatus.ACTIVE, today);
+            } catch (RuntimeException ex) {
+                log.error("[FOLLOWUP-JOB] could not list partners with due follow-ups, run aborted", ex);
+                return new RunSummary(0, 1, 0, elapsedMs(started));
+            }
+            log.info("[FOLLOWUP-JOB] started date={} partners={}", today, partnerIds.size());
+
+            for (Long partnerId : partnerIds) {
                 try {
-                    publisher.followupReminder(
-                            ((Number) r[0]).longValue(),
-                            ((Number) r[1]).longValue(),
-                            ((Number) r[2]).longValue(),
-                            r[3] == null ? null : ((Number) r[3]).longValue(),
-                            (String) r[5],
-                            (LocalDate) r[4],
-                            today);
-                    count++;
+                    FollowupReminderProcessor.PartnerResult r = processor.processPartner(partnerId, today);
+                    processed += r.processed();
+                    if (r.failed() > 0) {
+                        log.info("[FOLLOWUP-JOB] partnerId={} processed={} failed={}", partnerId, r.processed(), r.failed());
+                    } else {
+                        log.info("[FOLLOWUP-JOB] partnerId={} processed={}", partnerId, r.processed());
+                    }
+                    partnersOk++;
                 } catch (RuntimeException ex) {
-                    log.warn("Follow-up reminder failed for follow-up {}", r[0], ex);
+                    partnersFailed++;
+                    log.error("[FOLLOWUP-JOB] partner failed partnerId={}, continuing with the next partner", partnerId, ex);
                 }
             }
-        } while (rows.size() == PAGE_SIZE);
-        log.info("Follow-up reminder job finished: {} follow-up(s) checked", count);
+            long ms = elapsedMs(started);
+            log.info("[FOLLOWUP-JOB] finished partnersOk={} partnersFailed={} processed={} durationMs={}",
+                    partnersOk, partnersFailed, processed, ms);
+            return new RunSummary(partnersOk, partnersFailed, processed, ms);
+        } finally {
+            MDC.remove("requestId");
+        }
     }
+
+    private static long elapsedMs(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000L;
+    }
+
+    public record RunSummary(int partnersOk, int partnersFailed, int processed, long durationMs) { }
 }

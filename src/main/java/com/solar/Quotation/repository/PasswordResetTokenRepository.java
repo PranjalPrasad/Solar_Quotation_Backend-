@@ -21,4 +21,9 @@ public interface PasswordResetTokenRepository extends JpaRepository<PasswordRese
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update PasswordResetToken t set t.used = true where t.userId = :userId and t.used = false")
     int invalidateAllForUser(@Param("userId") Long userId);
+
+    /** Atomic single-use claim: 1 = this caller consumed the link, 0 = it was already consumed. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update PasswordResetToken t set t.used = true where t.id = :id and t.used = false")
+    int markUsed(@Param("id") Long id);
 }

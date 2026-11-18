@@ -9,7 +9,9 @@ public class CurrentUser {
     private Long roleId;
     private String roleCode;
     private DataScope dataScope;
-    private Long partnerId;
+    private Long partnerId;          // the caller's OWN tenant. For Super Admin this is the PLATFORM partner.
+    private Long viewPartnerId;      // ?viewPartnerId= of a GET request; only honoured for data scope ALL
+    private boolean readRequest;     // true only for GET/HEAD; set by JwtAuthFilter, so views never apply to writes
 
     public CurrentUser() { }
     public CurrentUser(Long userId, String name, Long roleId, String roleCode, DataScope dataScope, Long partnerId) {
@@ -29,5 +31,9 @@ public class CurrentUser {
     public void setDataScope(DataScope dataScope) { this.dataScope = dataScope; }
     public Long getPartnerId() { return partnerId; }
     public void setPartnerId(Long partnerId) { this.partnerId = partnerId; }
+    public Long getViewPartnerId() { return viewPartnerId; }
+    public void setViewPartnerId(Long viewPartnerId) { this.viewPartnerId = viewPartnerId; }
+    public boolean isReadRequest() { return readRequest; }
+    public void setReadRequest(boolean readRequest) { this.readRequest = readRequest; }
     public boolean isSuperAdmin() { return dataScope == DataScope.ALL; }
 }

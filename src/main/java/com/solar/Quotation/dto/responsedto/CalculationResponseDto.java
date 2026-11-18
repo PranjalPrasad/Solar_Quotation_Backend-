@@ -8,7 +8,7 @@ import java.time.Instant;
 public class CalculationResponseDto {
     private Long id;
     private String code;
-    private PartnerRef partner;
+    private PartnerRefResponseDto partner;
     private String customerName;
     private String projectName;
     private BigDecimal capacityKw;
@@ -21,8 +21,8 @@ public class CalculationResponseDto {
     public void setId(Long v) { this.id = v; }
     public String getCode() { return code; }
     public void setCode(String v) { this.code = v; }
-    public PartnerRef getPartner() { return partner; }
-    public void setPartner(PartnerRef v) { this.partner = v; }
+    public PartnerRefResponseDto getPartner() { return partner; }
+    public void setPartner(PartnerRefResponseDto v) { this.partner = v; }
     public String getCustomerName() { return customerName; }
     public void setCustomerName(String v) { this.customerName = v; }
     public String getProjectName() { return projectName; }
@@ -37,15 +37,6 @@ public class CalculationResponseDto {
     public void setResult(Result v) { this.result = v; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant v) { this.createdAt = v; }
-
-    public static class PartnerRef {
-        private Long id;
-        private String name;
-        public Long getId() { return id; }
-        public void setId(Long v) { this.id = v; }
-        public String getName() { return name; }
-        public void setName(String v) { this.name = v; }
-    }
 
     public static class Costs {
         private BigDecimal material, installation, transportation, civil, labour, electrical, other, discount;
@@ -68,7 +59,7 @@ public class CalculationResponseDto {
     }
 
     public static class Result {
-        private BigDecimal subtotal, gstPercent, gstAmount, grandTotal, costPerKw, estimatedSaving;
+        private BigDecimal subtotal, gstPercent, gstAmount, grandTotal, costPerKw, estimatedSaving, subsidyAmount, netInvestment;
         public BigDecimal getSubtotal() { return subtotal; }
         public void setSubtotal(BigDecimal v) { this.subtotal = v; }
         public BigDecimal getGstPercent() { return gstPercent; }
@@ -81,5 +72,9 @@ public class CalculationResponseDto {
         public void setCostPerKw(BigDecimal v) { this.costPerKw = v; }
         public BigDecimal getEstimatedSaving() { return estimatedSaving; }
         public void setEstimatedSaving(BigDecimal v) { this.estimatedSaving = v; }
+        public BigDecimal getSubsidyAmount() { return subsidyAmount; }
+        public void setSubsidyAmount(BigDecimal v) { this.subsidyAmount = v; }
+        public BigDecimal getNetInvestment() { return netInvestment; }
+        public void setNetInvestment(BigDecimal v) { this.netInvestment = v; }
     }
 }

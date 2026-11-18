@@ -4,9 +4,6 @@ import com.solar.Quotation.Enum.AuditAction;
 import com.solar.Quotation.Enum.PartnerType;
 import com.solar.Quotation.Enum.QuotationStatus;
 import com.solar.Quotation.Enum.RecordStatus;
-import com.solar.Quotation.exception.ApiException;
-import com.solar.Quotation.repository.QuotationRepository;
-import com.solar.Quotation.security.TenantResolver;
 import com.solar.Quotation.dto.requestdto.ChannelPartnerFilterRequestDto;
 import com.solar.Quotation.dto.requestdto.ChannelPartnerRequestDto;
 import com.solar.Quotation.dto.requestdto.ChannelPartnerStatusRequestDto;
@@ -17,17 +14,26 @@ import com.solar.Quotation.dto.responsedto.*;
 import com.solar.Quotation.entity.ChannelPartner;
 import com.solar.Quotation.entity.Quotation;
 import com.solar.Quotation.entity.Role;
+import com.solar.Quotation.exception.ApiException;
 import com.solar.Quotation.exception.BusinessException;
 import com.solar.Quotation.exception.ResourceNotFoundException;
 import com.solar.Quotation.repository.AppUserRepository;
 import com.solar.Quotation.repository.ChannelPartnerRepository;
+import com.solar.Quotation.repository.QuotationRepository;
 import com.solar.Quotation.repository.RoleRepository;
+import com.solar.Quotation.security.CurrentUser;
+import com.solar.Quotation.security.PartnerStatusGuard;
+import com.solar.Quotation.security.TenantContext;
+import com.solar.Quotation.security.TenantResolver;
 import com.solar.Quotation.service.AuditService;
 import com.solar.Quotation.service.ChannelPartnerService;
+import com.solar.Quotation.service.PartnerAllowedRoleService;
 import com.solar.Quotation.service.SettingsService;
 import com.solar.Quotation.service.UserService;
 import com.solar.Quotation.util.CodeGenerator;
 import com.solar.Quotation.util.DiffUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -46,6 +52,8 @@ import java.util.Set;
 @Service
 public class ChannelPartnerServiceImpl implements ChannelPartnerService {
 
+    private static final Logger log = LoggerFactory.getLogger(ChannelPartnerServiceImpl.class);
+
     /** The built-in PLATFORM tenant (created by data.sql). Partner codes are counted under it. */
     private static final Long PLATFORM_PARTNER_ID = 1L;
     private static final String PARTNER_ADMIN = "CHANNEL_PARTNER_ADMIN";
@@ -60,6 +68,8 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
     private final AuditService auditService;
     private final CodeGenerator codeGenerator;
     private final SettingsService settingsService;
+    private final PartnerAllowedRoleService allowedRoleService;
+    private final PartnerStatusGuard statusGuard;
 
     public ChannelPartnerServiceImpl(TenantResolver tenantResolver,
                                      QuotationRepository quotationRepo,
@@ -69,7 +79,9 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
                                      UserService userService,
                                      AuditService auditService,
                                      CodeGenerator codeGenerator,
-                                     SettingsService settingsService) {
+                                     SettingsService settingsService,
+                                     PartnerAllowedRoleService allowedRoleService,
+                                     PartnerStatusGuard statusGuard) {
         this.tenantResolver = tenantResolver;
         this.quotationRepo = quotationRepo;
         this.partnerRepository = partnerRepository;
@@ -79,33 +91,32 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
         this.auditService = auditService;
         this.codeGenerator = codeGenerator;
         this.settingsService = settingsService;
+        this.allowedRoleService = allowedRoleService;
+        this.statusGuard = statusGuard;
     }
 
+    // ---------------------------------------------------------------- referrals
 
     @Override
     @Transactional(readOnly = true)
     public PageResponse<ReferralActivityResponseDto> getReferralActivity(
-            Long partnerId, String status, org.springframework.data.domain.Pageable pageable) {
+            Long partnerId, String status, Pageable pageable) {
 
         Long scoped = tenantResolver.effectivePartnerId(partnerId);
         if (scoped == null) throw new ApiException(403, "partnerId required");
 
-        com.solar.Quotation.Enum.QuotationStatus st =
-                (status == null || status.isBlank())
-                        ? null
-                        : com.solar.Quotation.Enum.QuotationStatus.valueOf(status.trim().toUpperCase(java.util.Locale.ROOT));
+        QuotationStatus st = parseQuotationStatus(status);
 
-        org.springframework.data.domain.Page<Object[]> page =
-                quotationRepo.referralActivity(scoped, st, pageable);
+        Page<Object[]> page = quotationRepo.referralActivity(scoped, st, pageable);
 
         return PageResponse.of(page.map(r -> {
             ReferralActivityResponseDto d = new ReferralActivityResponseDto();
             d.setQuotationId(((Number) r[0]).longValue());
             d.setQuotationNo((String) r[1]);
             d.setCustomer((String) r[2]);
-            d.setQuotationAmount((java.math.BigDecimal) r[3]);
-            d.setReferralPercent((java.math.BigDecimal) r[4]);
-            d.setReferralAmount((java.math.BigDecimal) r[5]);
+            d.setQuotationAmount((BigDecimal) r[3]);
+            d.setReferralPercent((BigDecimal) r[4]);
+            d.setReferralAmount((BigDecimal) r[5]);
             d.setStatus(r[6] == null ? null : r[6].toString());
             d.setDate(toLocalDate(r[7]));
             d.setPaidDate(toLocalDate(r[8]));
@@ -115,48 +126,56 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
 
     @Override
     @Transactional
-    public void markReferralPaid(Long partnerId, Long quotationId,
-                                 com.solar.Quotation.dto.requestdto.ReferralMarkPaidRequestDto request) {
+    public void markReferralPaid(Long partnerId, Long quotationId, ReferralMarkPaidRequestDto request) {
 
         Long scoped = tenantResolver.effectivePartnerId(partnerId);
         if (scoped == null) throw new ApiException(403, "partnerId required");
 
-        com.solar.Quotation.entity.Quotation q =
-                quotationRepo.findOne(quotationId, scoped, null)
-                        .orElseThrow(() -> new ApiException(404, "Quotation not found"));
+        Quotation q = quotationRepo.findOne(quotationId, scoped, null)
+                .orElseThrow(() -> new ApiException(404, "Quotation not found"));
 
-        if (q.getStatus() != com.solar.Quotation.Enum.QuotationStatus.APPROVED) {
+        if (q.getStatus() != QuotationStatus.APPROVED) {
             throw new ApiException(400, "Only APPROVED referrals can be marked PAID");
         }
         if (q.getReferralPaidDate() != null) {
             throw new ApiException(400, "Referral already marked paid");
         }
 
-        java.util.Map<String, Object> before = new java.util.LinkedHashMap<>();
+        Map<String, Object> before = new LinkedHashMap<>();
         before.put("status", q.getStatus().name());
         before.put("referralPaidDate", q.getReferralPaidDate());
 
-        q.setStatus(com.solar.Quotation.Enum.QuotationStatus.PAID);
+        q.setStatus(QuotationStatus.PAID);
         q.setReferralPaidDate(request.getPaidDate());
         q.setReferralPaymentRef(request.getPaymentRef());
         q.setReferralPaymentRemarks(request.getRemarks());
         quotationRepo.save(q);
 
-        java.util.Map<String, Object> after = new java.util.LinkedHashMap<>();
+        Map<String, Object> after = new LinkedHashMap<>();
         after.put("status", q.getStatus().name());
         after.put("referralPaidDate", q.getReferralPaidDate());
         after.put("referralPaymentRef", q.getReferralPaymentRef());
         after.put("referralPaymentRemarks", q.getReferralPaymentRemarks());
 
-        auditService.record(com.solar.Quotation.Enum.AuditAction.MARK_PAID,
+        auditService.record(AuditAction.MARK_PAID,
                 "CHANNEL_PARTNER", "Quotation", q.getId(), q.getCode(),
-                q.getChannelPartnerId(), com.solar.Quotation.util.DiffUtil.diff(before, after));
+                q.getChannelPartnerId(), before, after);
+        log.info("[PARTNER] referral marked paid partnerId={} quotationId={} actor={}", scoped, quotationId, actorId());
     }
 
-    private java.time.LocalDate toLocalDate(Object o) {
+    private QuotationStatus parseQuotationStatus(String status) {
+        if (status == null || status.isBlank()) return null;
+        try {
+            return QuotationStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException("VALIDATION_ERROR", "Unknown status " + status);
+        }
+    }
+
+    private LocalDate toLocalDate(Object o) {
         if (o == null) return null;
-        if (o instanceof java.time.LocalDate ld) return ld;
-        if (o instanceof java.time.LocalDateTime ldt) return ldt.toLocalDate();
+        if (o instanceof LocalDate ld) return ld;
+        if (o instanceof LocalDateTime ldt) return ldt.toLocalDate();
         if (o instanceof java.sql.Date d) return d.toLocalDate();
         if (o instanceof java.sql.Timestamp t) return t.toLocalDateTime().toLocalDate();
         return null;
@@ -227,24 +246,37 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
         p.setReferralCode("REF-" + p.getCode().replace("-", ""));
         p.setPartnerType(PartnerType.PARTNER);
         applyFields(p, req);
-        p.setStatus(parseStatus(req.getStatus()) == null ? RecordStatus.ACTIVE : parseStatus(req.getStatus()));
+        RecordStatus requested = parseStatus(req.getStatus());
+        p.setStatus(requested == null ? RecordStatus.ACTIVE : requested);
         ChannelPartner saved = partnerRepository.save(p);
 
         // the new partner starts with its own copy of the settings; later changes never cross over
         settingsService.seedForPartner(saved.getId());
+        // default allowed roles: sirf partner admin role (Super Admin baad me badha sakta hai)
+        allowedRoleService.seedDefault(saved.getId(), adminRole.getId());
 
         auditService.record(AuditAction.CREATE, "CHANNEL_PARTNER", "ChannelPartner", saved.getId(), saved.getCode(),
-                saved.getId(), DiffUtil.diff(null, snapshot(saved)));
+                saved.getId(), null, snapshot(saved));
+
+        // username: request me ho to wahi, warna partner code se generate (cp0001.admin)
+        String username = blankToNull(req.getAdminUser().getUsername());
+        if (username == null) {
+            username = saved.getCode().toLowerCase(Locale.ROOT).replace("-", "") + ".admin";
+        }
 
         UserRequestDto admin = new UserRequestDto();
         admin.setName(req.getAdminUser().getName());
         admin.setEmail(req.getAdminUser().getEmail());
-        admin.setUsername(req.getAdminUser().getUsername());
+        admin.setUsername(username);
         admin.setPhone(req.getAdminUser().getPhone());
         admin.setRoleId(adminRole.getId());
         admin.setPartnerId(saved.getId());
         admin.setStatus("ACTIVE");
+        // UserService.create ko temporary password generate karna hai aur must_change_password=true set karna hai
         UserResponseDto createdAdmin = userService.create(admin);
+
+        log.info("[PARTNER] created partnerId={} code={} adminUserId={} actor={}",
+                saved.getId(), saved.getCode(), createdAdmin.getId(), actorId());
 
         ChannelPartnerResponseDto out = toResponse(saved, statsWithUsers(1));
         ChannelPartnerResponseDto.AdminUserInfo info = new ChannelPartnerResponseDto.AdminUserInfo();
@@ -261,6 +293,7 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
     public ChannelPartnerResponseDto update(Long id, ChannelPartnerRequestDto req) {
         ChannelPartner p = findPartner(id);
         Map<String, Object> before = snapshot(p);
+        RecordStatus oldStatus = p.getStatus();
         applyFields(p, req);
         RecordStatus newStatus = parseStatus(req.getStatus());
         if (newStatus != null) {
@@ -269,7 +302,9 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
         ChannelPartner saved = partnerRepository.save(p);
 
         auditService.record(AuditAction.UPDATE, "CHANNEL_PARTNER", "ChannelPartner", saved.getId(), saved.getCode(),
-                saved.getId(), DiffUtil.diff(before, snapshot(saved)));
+                saved.getId(), before, snapshot(saved));
+        log.info("[PARTNER] updated partnerId={} actor={}", saved.getId(), actorId());
+        onStatusChanged(saved, oldStatus);
         return toResponse(saved, statsFor(saved.getId()));
     }
 
@@ -277,15 +312,38 @@ public class ChannelPartnerServiceImpl implements ChannelPartnerService {
     @Transactional
     public ChannelPartnerResponseDto updateStatus(Long id, ChannelPartnerStatusRequestDto req) {
         ChannelPartner p = findPartner(id);
+        RecordStatus target = parseStatus(req.getStatus());
+        if (target == null) {
+            throw new BusinessException("VALIDATION_ERROR", "Status is required");
+        }
+        if (p.getStatus() == target) {
+            return toResponse(p, statsFor(p.getId()));   // no-op: audit / log nahi
+        }
         Map<String, Object> before = snapshot(p);
-        p.setStatus(RecordStatus.valueOf(req.getStatus()));
+        RecordStatus oldStatus = p.getStatus();
+        p.setStatus(target);
         ChannelPartner saved = partnerRepository.save(p);
 
         auditService.record(AuditAction.STATUS_CHANGE, "CHANNEL_PARTNER", "ChannelPartner", saved.getId(),
-                saved.getCode(), saved.getId(), DiffUtil.diff(before, snapshot(saved)));
+                saved.getCode(), saved.getId(), before, snapshot(saved));
+        onStatusChanged(saved, oldStatus);
         return toResponse(saved, statsFor(saved.getId()));
     }
+
     // ---------------------------------------------------------------- helpers
+
+    /** Log + cache evict taaki deactivation turant lage. */
+    private void onStatusChanged(ChannelPartner saved, RecordStatus oldStatus) {
+        if (saved.getStatus() == oldStatus) return;
+        statusGuard.evict(saved.getId());
+        log.info("[PARTNER] {} partnerId={} actor={}",
+                saved.getStatus() == RecordStatus.ACTIVE ? "activated" : "deactivated", saved.getId(), actorId());
+    }
+
+    private Long actorId() {
+        CurrentUser u = TenantContext.get();
+        return u == null ? null : u.getUserId();
+    }
 
     private ChannelPartner findPartner(Long id) {
         return partnerRepository.findByIdAndDeletedFalse(id)

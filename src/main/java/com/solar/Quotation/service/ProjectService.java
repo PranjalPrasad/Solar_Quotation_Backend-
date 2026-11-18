@@ -14,8 +14,7 @@ public interface ProjectService {
 
     PageResponse<ProjectResponseDto> list(ProjectFilterRequestDto filter);
 
-    /** partnerId is honoured for Super Admin only. */
-    ProjectSummaryResponseDto summary(Long partnerId);
+    ProjectSummaryResponseDto summary();
 
     ProjectResponseDto get(Long id);
 

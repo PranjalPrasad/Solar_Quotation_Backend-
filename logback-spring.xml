@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Environment variables (all optional):
+    LOG_LEVEL_ROOT      default INFO   libraries
+    LOG_LEVEL_APP       default INFO   com.solar.Quotation (set DEBUG while developing)
+    LOG_LEVEL_SQL       default WARN   org.hibernate.SQL (DEBUG prints every statement)
+    LOG_LEVEL_SECURITY  default WARN   org.springframework.security
+    LOG_DIR             default ./logs
+-->
+<configuration>
+    <property name="LOG_PATH" value="${LOG_DIR:-logs}"/>
+    <!-- time level [requestId][userId][partnerId] logger - message ; "-" when the value is not set -->
+    <property name="LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{requestId:--}][%X{userId:--}][%X{partnerId:--}] %logger{30} - %msg%n"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_PATH}/quotation.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_PATH}/quotation.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>14</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <logger name="com.solar.Quotation" level="${LOG_LEVEL_APP:-INFO}"/>
+    <logger name="org.hibernate.SQL" level="${LOG_LEVEL_SQL:-WARN}"/>
+    <logger name="org.springframework.security" level="${LOG_LEVEL_SECURITY:-WARN}"/>
+
+    <root level="${LOG_LEVEL_ROOT:-INFO}">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>

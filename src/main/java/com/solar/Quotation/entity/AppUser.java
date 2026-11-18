@@ -54,6 +54,10 @@ public class AppUser extends TenantBaseEntity {
     @Column(name = "must_change_password", nullable = false)
     private boolean mustChangePassword;
 
+    /** Access tokens issued before this moment are rejected (password change, reset, forced revocation). */
+    @Column(name = "token_valid_after")
+    private LocalDateTime tokenValidAfter;
+
     public String getCode() { return code; }
     public void setCode(String code) { this.code = code; }
     public String getName() { return name; }
@@ -78,4 +82,6 @@ public class AppUser extends TenantBaseEntity {
     public void setLastLoginAt(LocalDateTime lastLoginAt) { this.lastLoginAt = lastLoginAt; }
     public boolean isMustChangePassword() { return mustChangePassword; }
     public void setMustChangePassword(boolean mustChangePassword) { this.mustChangePassword = mustChangePassword; }
+    public LocalDateTime getTokenValidAfter() { return tokenValidAfter; }
+    public void setTokenValidAfter(LocalDateTime tokenValidAfter) { this.tokenValidAfter = tokenValidAfter; }
 }

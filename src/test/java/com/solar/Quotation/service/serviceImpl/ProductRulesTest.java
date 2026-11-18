@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /** Pure rules of the product module (no Spring, no database). Same package so package-private helpers are visible. */
 class ProductRulesTest {
 
-    private final ProductServiceImpl service = new ProductServiceImpl(null, null, null, null, null, null, null);
+    private final ProductServiceImpl service = new ProductServiceImpl(null, null, null, null, null, null, null, null);
 
     @Test
     void priceIsMrpMinusDiscountWhenBothAreGiven() {

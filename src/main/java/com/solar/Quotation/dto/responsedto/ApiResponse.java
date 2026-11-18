@@ -13,6 +13,10 @@ public class ApiResponse<T> {
     private String errorCode;
     private List<FieldError> errors;
     private String timestamp = Instant.now().toString();
+    private String requestId;
+
+    public String getRequestId() { return requestId; }
+    public void setRequestId(String requestId) { this.requestId = requestId; }
 
     public ApiResponse() { }
 

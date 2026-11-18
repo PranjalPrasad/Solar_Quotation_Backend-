@@ -11,11 +11,16 @@ import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
 import java.util.List;
 
+/**
+ * Read + insert only. The inherited delete and deleteAll methods exist on JpaRepository, but audit_log is protected
+ * by @Immutable, by DB triggers and by the grants of the application's DB user, and AuditImmutabilityTest fails
+ * the build if anything in the code base calls them.
+ */
 public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
 
-    @Query("select a from AuditLog a where a.deleted = false "
-            + "and (:partnerId is null or a.channelPartnerId = :partnerId) "
-            + "and (:hideAdmin = false or a.actorRole is null or a.actorRole <> 'SUPER_ADMIN') "
+    /** tenantId null = every tenant (platform audit screen only; AuditAccessGuard has already run). */
+    @Query("select a from AuditLog a where 1 = 1 "
+            + "and (:tenantId is null or a.tenantId = :tenantId) "
             + "and (:userId is null or a.actorUserId = :userId) "
             + "and (:module is null or a.module = :module) "
             + "and (:action is null or a.action = :action) "
@@ -23,9 +28,9 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
             + "and (:entityId is null or a.entityId = :entityId) "
             + "and a.createdAt >= :fromTs and a.createdAt < :toTs "
             + "and (:search is null or lower(a.entityLabel) like lower(concat('%', :search, '%')) "
-            + "     or lower(a.actorName) like lower(concat('%', :search, '%')))")
-    Page<AuditLog> search(@Param("partnerId") Long partnerId,
-                          @Param("hideAdmin") boolean hideAdmin,
+            + "     or lower(a.actorName) like lower(concat('%', :search, '%')) "
+            + "     or lower(a.entityType) like lower(concat('%', :search, '%')))")
+    Page<AuditLog> search(@Param("tenantId") Long tenantId,
                           @Param("userId") Long userId,
                           @Param("module") String module,
                           @Param("action") AuditAction action,
@@ -37,18 +42,17 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
                           Pageable pageable);
 
     /** Per-record history tab (customer, quotation). Always scoped to one partner for partner roles. */
-    @Query("select a from AuditLog a where a.deleted = false "
-            + "and (:partnerId is null or a.channelPartnerId = :partnerId) "
+    @Query("select a from AuditLog a where (:tenantId is null or a.tenantId = :tenantId) "
             + "and (:hideAdmin = false or a.actorRole is null or a.actorRole <> 'SUPER_ADMIN') "
             + "and a.entityType = :entityType and a.entityId = :entityId "
-            + "order by a.createdAt desc")
-    List<AuditLog> findHistory(@Param("partnerId") Long partnerId,
+            + "order by a.createdAt desc, a.id desc")
+    List<AuditLog> findHistory(@Param("tenantId") Long tenantId,
                                @Param("hideAdmin") boolean hideAdmin,
                                @Param("entityType") String entityType,
                                @Param("entityId") Long entityId,
                                Pageable pageable);
 
     /** Modules that actually appear in the audit log (feeds the module filter on the Audit Log screen). */
-    @Query("select distinct a.module from AuditLog a where a.deleted = false order by a.module")
+    @Query("select distinct a.module from AuditLog a order by a.module")
     List<String> distinctModules();
 }

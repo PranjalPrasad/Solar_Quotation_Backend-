@@ -12,7 +12,8 @@ import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 
 /**
- * Create and update. partnerId is read only for SUPER_ADMIN on create (required there).
+ * Create and update. There is no partnerId: every product belongs to the caller's own tenant
+ * (Super Admin: the PLATFORM catalog). A partnerId sent by an old client is ignored.
  * When mrp and discountPercent are both sent, price is recomputed and the sent price is ignored.
  * Otherwise price is required.
  */
@@ -78,8 +79,6 @@ public class ProductRequestDto {
     @Size(max = 500, message = "Description is too long")
     private String description;
 
-    private Long partnerId;
-
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
     public String getCategory() { return category; }
@@ -114,6 +113,4 @@ public class ProductRequestDto {
     public void setStatus(String status) { this.status = status; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
-    public Long getPartnerId() { return partnerId; }
-    public void setPartnerId(Long partnerId) { this.partnerId = partnerId; }
 }

@@ -74,7 +74,10 @@ public class SettingsProviderImpl implements SettingsProvider {
     @Override
     @Transactional(readOnly = true)
     public BankDetailsResponseDto bank(Long partnerId) {
-        return read(partnerId, KEY_BANK, BankDetailsResponseDto.class, SettingsDefaults::bank);
+        // Only the PLATFORM tenant falls back to the built-in sample account; any other tenant that has not saved its own
+        // bank details gets EMPTY ones, so a partner's quotation never shows somebody else's account.
+        return read(partnerId, KEY_BANK, BankDetailsResponseDto.class,
+                () -> PLATFORM_PARTNER_ID.equals(scope(partnerId)) ? SettingsDefaults.bank() : SettingsDefaults.emptyBank());
     }
 
     @Override

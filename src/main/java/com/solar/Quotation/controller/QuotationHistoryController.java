@@ -1,10 +1,9 @@
 package com.solar.Quotation.controller;
+
 import com.solar.Quotation.dto.requestdto.QuotationHistoryDto;
 import com.solar.Quotation.dto.responsedto.ApiResponse;
 import com.solar.Quotation.security.RequirePermission;
-import com.solar.Quotation.service.QuotationHistoryService;
-import com.solar.Quotation.service.QuotationAccessGuard;
-import org.springframework.security.access.prepost.PreAuthorize;
+import com.solar.Quotation.service.QuotationService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -16,19 +15,19 @@ import java.util.List;
 @RequestMapping("/api/quotations")
 public class QuotationHistoryController {
 
-    private final QuotationHistoryService history;
-    private final QuotationAccessGuard access;
+    private final QuotationService quotations;
 
-    public QuotationHistoryController(QuotationHistoryService history, QuotationAccessGuard access) {
-        this.history = history;
-        this.access = access;
+    public QuotationHistoryController(QuotationService quotations) {
+        this.quotations = quotations;
     }
 
-    /** Newest first. Same visibility rules as GET /api/quotations/{id}. */
+    /**
+     * Newest first. The quotation is tenant-checked first (own tenant, or ?viewPartnerId= for Super Admin), then the
+     * history is read with that quotation's partner id. Another partner's id is a 404, not an empty list.
+     */
     @GetMapping("/{id}/history")
     @RequirePermission("QUOTATION:VIEW")
     public ApiResponse<List<QuotationHistoryDto>> history(@PathVariable Long id) {
-        access.assertCanView(id);
-        return ApiResponse.ok(history.list(id));
+        return ApiResponse.ok(quotations.history(id));
     }
 }

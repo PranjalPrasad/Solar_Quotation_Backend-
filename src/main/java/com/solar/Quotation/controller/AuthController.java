@@ -11,6 +11,7 @@ import com.solar.Quotation.dto.responsedto.LoginResponseDto;
 import com.solar.Quotation.dto.responsedto.TokenResponseDto;
 import com.solar.Quotation.service.AuthService;
 import com.solar.Quotation.service.PasswordResetService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,6 +21,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * login, refresh, forgot-password and reset-password are public (see SecurityConfig and JwtAuthFilter).
+ * The client IP is getRemoteAddr(). Behind a reverse proxy set server.forward-headers-strategy=native and
+ * server.tomcat.remoteip.internal-proxies so Tomcat resolves the real address; do not parse X-Forwarded-For here.
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -34,8 +37,8 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public ApiResponse<LoginResponseDto> login(@Valid @RequestBody LoginRequestDto req) {
-        return ApiResponse.ok(service.login(req), "Login successful");
+    public ApiResponse<LoginResponseDto> login(@Valid @RequestBody LoginRequestDto req, HttpServletRequest http) {
+        return ApiResponse.ok(service.login(req, http.getRemoteAddr()), "Login successful");
     }
 
     @PostMapping("/refresh")
@@ -61,15 +64,15 @@ public class AuthController {
     }
 
     @PostMapping("/forgot-password")
-    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequestDto req) {
-        passwordResetService.requestReset(req);
+    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequestDto req, HttpServletRequest http) {
+        passwordResetService.requestReset(req, http.getRemoteAddr());
         return ApiResponse.ok(null,
                 "If an account exists for that email or username, a password reset link has been sent.");
     }
 
     @PostMapping("/reset-password")
-    public ApiResponse<Void> resetPassword(@Valid @RequestBody ResetPasswordRequestDto req) {
-        passwordResetService.resetPassword(req);
+    public ApiResponse<Void> resetPassword(@Valid @RequestBody ResetPasswordRequestDto req, HttpServletRequest http) {
+        passwordResetService.resetPassword(req, http.getRemoteAddr());
         return ApiResponse.ok(null, "Password reset successful. Please log in with your new password.");
     }
 }

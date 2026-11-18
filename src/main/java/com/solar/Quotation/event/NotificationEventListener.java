@@ -19,10 +19,12 @@ public class NotificationEventListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onNotificationRequested(NotificationRequestedEvent event) {
         try {
-            writer.write(event.drafts());
+            NotificationWriter.Result r = writer.write(event.drafts());
+            log.debug("[NOTIFY] stored saved={} duplicates={} dropped={} failed={}",
+                    r.saved(), r.duplicates(), r.dropped(), r.failed());
         } catch (RuntimeException ex) {
             // a notification problem must never surface to the user who did the real work
-            log.warn("Could not save {} notification(s)", event.drafts().size(), ex);
+            log.error("[NOTIFY] save failed drafts={}", event.drafts().size(), ex);
         }
     }
 }

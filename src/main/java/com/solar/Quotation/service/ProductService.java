@@ -17,11 +17,15 @@ public interface ProductService {
 
     PageResponse<ProductResponseDto> list(ProductFilterRequestDto filter);
 
-    /** Active products for the quotation picker. partnerId is honoured for Super Admin only. */
-    List<ProductCatalogItemResponseDto> catalog(Long partnerId);
+    /**
+     * Reads (list, catalog, summary, get) use TenantResolver.effectiveReadPartnerId(): the caller's own tenant, or,
+     * for Super Admin on a GET, the partner named by ?viewPartnerId=. Writes always use the caller's own tenant.
+     */
 
-    /** partnerId is honoured for Super Admin only. */
-    ProductSummaryResponseDto summary(Long partnerId);
+    /** Active products for the quotation picker. */
+    List<ProductCatalogItemResponseDto> catalog();
+
+    ProductSummaryResponseDto summary();
 
     ProductResponseDto get(Long id);
 
@@ -33,7 +37,7 @@ public interface ProductService {
 
     ProductResponseDto adjustStock(Long id, StockAdjustRequestDto req);
 
-    /** Stock ledger of one product, newest first. */
+    /** Stock ledger of one product, newest first. Own tenant only (stock movements are never read across tenants). */
     List<StockMovementResponseDto> stockHistory(Long id);
 
     /** Records a stock IN / OUT line and updates the product stock. */

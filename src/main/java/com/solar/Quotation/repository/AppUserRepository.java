@@ -6,9 +6,11 @@ import com.solar.Quotation.entity.AppUser;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -68,4 +70,14 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
     @Query("select u.channelPartnerId, count(u) from AppUser u where u.deleted = false "
             + "and u.channelPartnerId in :partnerIds group by u.channelPartnerId")
     List<Object[]> countGroupedByPartner(@Param("partnerIds") Collection<Long> partnerIds);
+
+    /** Partner deactivated: every access token issued before :ts of its users stops working. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update AppUser u set u.tokenValidAfter = :ts where u.channelPartnerId = :pid")
+    int invalidateAccessTokensForPartner(@Param("pid") Long partnerId, @Param("ts") LocalDateTime ts);
+
+    /** Role deactivated: same for every user holding that role. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update AppUser u set u.tokenValidAfter = :ts where u.roleId = :rid")
+    int invalidateAccessTokensForRole(@Param("rid") Long roleId, @Param("ts") LocalDateTime ts);
 }

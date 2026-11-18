@@ -14,13 +14,17 @@ public class AuditLogResponseDto {
     private Long actorUserId;
     private String actorName;
     private String actorRole;
-    private Long actorPartnerId;
+    private Long tenantId;
+    private Long actorTenantId;
     private String module;
     private String entityType;
     private Long entityId;
     private String entityLabel;
     private String action;
     private Object changes;
+    /** Masked state before / after. Only on the single-entry endpoint (GET /api/audit/{id}), never in lists. */
+    private Object previousData;
+    private Object newData;
     private String ipAddress;
     private String userAgent;
 
@@ -36,8 +40,10 @@ public class AuditLogResponseDto {
     public void setActorName(String actorName) { this.actorName = actorName; }
     public String getActorRole() { return actorRole; }
     public void setActorRole(String actorRole) { this.actorRole = actorRole; }
-    public Long getActorPartnerId() { return actorPartnerId; }
-    public void setActorPartnerId(Long actorPartnerId) { this.actorPartnerId = actorPartnerId; }
+    public Long getTenantId() { return tenantId; }
+    public void setTenantId(Long tenantId) { this.tenantId = tenantId; }
+    public Long getActorTenantId() { return actorTenantId; }
+    public void setActorTenantId(Long actorTenantId) { this.actorTenantId = actorTenantId; }
     public String getModule() { return module; }
     public void setModule(String module) { this.module = module; }
     public String getEntityType() { return entityType; }
@@ -50,6 +56,10 @@ public class AuditLogResponseDto {
     public void setAction(String action) { this.action = action; }
     public Object getChanges() { return changes; }
     public void setChanges(Object changes) { this.changes = changes; }
+    public Object getPreviousData() { return previousData; }
+    public void setPreviousData(Object previousData) { this.previousData = previousData; }
+    public Object getNewData() { return newData; }
+    public void setNewData(Object newData) { this.newData = newData; }
     public String getIpAddress() { return ipAddress; }
     public void setIpAddress(String ipAddress) { this.ipAddress = ipAddress; }
     public String getUserAgent() { return userAgent; }

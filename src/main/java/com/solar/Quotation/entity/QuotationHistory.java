@@ -6,12 +6,17 @@ import java.time.Instant;
 
 /** One saved change of a quotation. Rows are append-only: never updated, never deleted. */
 @Entity
-@Table(name = "quotation_history")
+@Table(name = "quotation_history",
+        indexes = @Index(name = "idx_qhistory_partner_quotation", columnList = "channel_partner_id,quotation_id,version"))
 public class QuotationHistory {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /** Tenant column. Copied from the quotation when the row is written; never changes; every read filters by it. */
+    @Column(name = "channel_partner_id", nullable = false, updatable = false)
+    private Long channelPartnerId;
 
     @Column(name = "quotation_id", nullable = false)
     private Long quotationId;
@@ -56,6 +61,8 @@ public class QuotationHistory {
 
     // ---- getters / setters ----
     public Long getId() { return id; }
+    public Long getChannelPartnerId() { return channelPartnerId; }
+    public void setChannelPartnerId(Long channelPartnerId) { this.channelPartnerId = channelPartnerId; }
     public Long getQuotationId() { return quotationId; }
     public void setQuotationId(Long quotationId) { this.quotationId = quotationId; }
     public String getQuotationCode() { return quotationCode; }

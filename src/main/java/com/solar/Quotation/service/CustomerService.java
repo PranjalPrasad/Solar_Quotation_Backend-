@@ -17,8 +17,8 @@ public interface CustomerService {
 
     PageResponse<CustomerResponseDto> list(CustomerFilterRequestDto filter);
 
-    /** partnerId is honoured for Super Admin only. */
-    CustomerSummaryResponseDto summary(Long partnerId);
+    /** Own tenant, or the partner named by ?viewPartnerId= for Super Admin on a GET. */
+    CustomerSummaryResponseDto summary();
 
     CustomerResponseDto get(Long id);
 

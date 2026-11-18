@@ -14,6 +14,9 @@ import java.util.function.Function;
 /** Builds the .xlsx files for the report export. */
 public final class ExcelExportUtil {
 
+    /** Hard ceiling for one sheet, whatever the caller passes (the service refuses larger exports first). */
+    public static final int MAX_ROWS = 10_000;
+
     private ExcelExportUtil() {}
 
     public static byte[] quotations(List<ReportRowResponseDto.Quotation> rows) {
@@ -41,6 +44,9 @@ public final class ExcelExportUtil {
     }
 
     private static <T> byte[] build(String sheetName, String[] headers, List<T> rows, Function<T, Object[]> mapper) {
+        if (rows.size() > MAX_ROWS) {
+            throw new IllegalArgumentException("Too many rows for one export: " + rows.size());
+        }
         try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             Sheet sheet = wb.createSheet(sheetName);
 
@@ -72,7 +78,7 @@ public final class ExcelExportUtil {
                     } else if (v instanceof Number n) {
                         c.setCellValue(n.doubleValue());
                     } else {
-                        c.setCellValue(v.toString());
+                        c.setCellValue(SpreadsheetSafe.text(v.toString()));
                     }
                 }
             }

@@ -29,6 +29,10 @@ public interface UserService {
 
     void delete(Long id);
 
-    /** Roles the caller may assign: Super Admin sees all, a partner admin only partner-level roles. */
-    List<RoleRefResponseDto> roleOptions();
+    /**
+     * Roles that may be assigned inside a partner: active, not data scope ALL, and listed in partner_allowed_role.
+     * A partner admin always gets the list of their own partner (partnerId is ignored for them).
+     * Super Admin passes the partner they are about to create a user in; null means the PLATFORM partner.
+     */
+    List<RoleRefResponseDto> roleOptions(Long partnerId);
 }

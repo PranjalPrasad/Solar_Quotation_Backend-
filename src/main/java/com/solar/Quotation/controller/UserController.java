@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -52,10 +53,11 @@ public class UserController {
         return ApiResponse.ok(service.summary());
     }
 
+    /** Roles assignable in a partner. Partner admins always get their own partner's list (partnerId is ignored). */
     @GetMapping("/role-options")
     @RequirePermission("USER:CREATE")
-    public ApiResponse<List<RoleRefResponseDto>> roleOptions() {
-        return ApiResponse.ok(service.roleOptions());
+    public ApiResponse<List<RoleRefResponseDto>> roleOptions(@RequestParam(required = false) Long partnerId) {
+        return ApiResponse.ok(service.roleOptions(partnerId));
     }
 
     @GetMapping("/{id}")

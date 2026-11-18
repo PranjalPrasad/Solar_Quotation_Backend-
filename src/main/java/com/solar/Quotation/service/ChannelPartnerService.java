@@ -10,7 +10,6 @@ public interface ChannelPartnerService {
 
     PageResponse<ChannelPartnerResponseDto> list(ChannelPartnerFilterRequestDto filter);
 
-
     List<PartnerOptionResponseDto> options();
 
     ChannelPartnerResponseDto get(Long id);
@@ -26,9 +25,7 @@ public interface ChannelPartnerService {
 
     PageResponse<UserResponseDto> users(Long id, UserFilterRequestDto filter);
 
-    com.solar.Quotation.dto.responsedto.PageResponse<com.solar.Quotation.dto.responsedto.ReferralActivityResponseDto>
-    getReferralActivity(Long partnerId, String status, org.springframework.data.domain.Pageable pageable);
+    PageResponse<ReferralActivityResponseDto> getReferralActivity(Long partnerId, String status, Pageable pageable);
 
-    void markReferralPaid(Long partnerId, Long quotationId,
-                          com.solar.Quotation.dto.requestdto.ReferralMarkPaidRequestDto request);
+    void markReferralPaid(Long partnerId, Long quotationId, ReferralMarkPaidRequestDto request);
 }

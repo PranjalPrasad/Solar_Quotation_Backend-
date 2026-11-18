@@ -1,0 +1,14 @@
+package com.solar.Quotation.dto.requestdto;
+
+import jakarta.validation.constraints.NotNull;
+
+import java.util.List;
+
+public class AllowedRolesRequestDto {
+
+    @NotNull(message = "roleIds is required")
+    private List<Long> roleIds;
+
+    public List<Long> getRoleIds() { return roleIds; }
+    public void setRoleIds(List<Long> roleIds) { this.roleIds = roleIds; }
+}

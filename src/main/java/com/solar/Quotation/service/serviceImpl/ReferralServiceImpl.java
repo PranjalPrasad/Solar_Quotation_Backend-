@@ -27,7 +27,9 @@ import com.solar.Quotation.repository.CustomerRepository;
 import com.solar.Quotation.repository.QuotationRepository;
 import com.solar.Quotation.repository.ReferralRepository;
 import com.solar.Quotation.security.CurrentUser;
+import com.solar.Quotation.security.Actors;
 import com.solar.Quotation.security.TenantContext;
+import com.solar.Quotation.security.TenantResolver;
 import com.solar.Quotation.service.AuditService;
 import com.solar.Quotation.service.PartnerRefProvider;
 import com.solar.Quotation.service.ReferralService;
@@ -35,6 +37,8 @@ import com.solar.Quotation.service.UserNameProvider;
 import com.solar.Quotation.util.AuditInfoMapper;
 import com.solar.Quotation.util.CodeGenerator;
 import com.solar.Quotation.util.DiffUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,16 +56,23 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Visibility rules (the channel partner isolation of this module):
- *  - Super Admin: every referral, can filter by owner partner (partnerId) and by earning partner (referrerPartnerId).
- *  - Partner user: ONLY the referrals their own partner EARNED. They never see the customer, the owner partner,
- *    remarks or audit of the quotation (those belong to another partner). Another partner's id gives 404.
+ * Tenant rules (Module 5). channelPartnerId of a referral = the partner that OWNS the quotation (and pays the commission).
+ *  - Super Admin: reads the referrals of his OWN tenant (PLATFORM), or of ONE other partner with ?viewPartnerId= on a
+ *    GET (TenantResolver.effectiveReadPartnerId). The old ?partnerId= is ignored (WARN). referrerPartnerId only narrows.
+ *    Totals (summary, partner-totals) use the same tenant, so they never add up other partners' data.
+ *  - Partner user: the referrals their partner OWNS or EARNED. Customer, owner partner, remarks and audit stay hidden.
+ *    Another partner's id gives 404.
+ *  - MARK PAID is a write: it works only inside the caller's own tenant (owner of the quotation), needs REFERRAL:MARK_PAID,
+ *    and a referral of another tenant looks like a missing one (404 + WARN).
+ * Logging: status and payment events at INFO with the [REFERRAL] tag, refusals at WARN.
  * Lifecycle (follows the quotation, nothing to approve by hand):
  *  quotation created with a partner referrer -> PENDING; quotation ACCEPTED -> APPROVED; quotation REJECTED -> REJECTED;
  *  Super Admin marks APPROVED as PAID.
  */
 @Service
 public class ReferralServiceImpl implements ReferralService {
+
+    private static final Logger log = LoggerFactory.getLogger(ReferralServiceImpl.class);
 
     private static final Set<String> SORT_FIELDS =
             Set.of("quoteDate", "referralAmount", "quotationAmount", "status", "referrerName", "code", "createdAt");
@@ -79,12 +90,14 @@ public class ReferralServiceImpl implements ReferralService {
     private final AuditService auditService;
     private final CodeGenerator codeGenerator;
     private final ChannelPartnerRepository channelPartnerRepository;
+    private final TenantResolver tenantResolver;
 
     public ReferralServiceImpl(ReferralRepository referralRepository, QuotationRepository quotationRepository,
                                CustomerRepository customerRepository, PartnerRefProvider partnerRefProvider,
                                UserNameProvider userNameProvider, AuditInfoMapper auditInfoMapper,
                                AuditService auditService, CodeGenerator codeGenerator,
-                               ChannelPartnerRepository channelPartnerRepository) {
+                               ChannelPartnerRepository channelPartnerRepository,
+                               TenantResolver tenantResolver) {
         this.referralRepository = referralRepository;
         this.quotationRepository = quotationRepository;
         this.customerRepository = customerRepository;
@@ -94,6 +107,7 @@ public class ReferralServiceImpl implements ReferralService {
         this.auditService = auditService;
         this.codeGenerator = codeGenerator;
         this.channelPartnerRepository = channelPartnerRepository;
+        this.tenantResolver = tenantResolver;
     }
 
     @Override
@@ -114,11 +128,12 @@ public class ReferralServiceImpl implements ReferralService {
     public PageResponse<ReferralResponseDto> list(ReferralFilterRequestDto f) {
         CurrentUser u = caller();
         boolean sa = u.isSuperAdmin();
-        Long ownerPartnerId = sa ? f.getPartnerId() : null;
-        Long referrerPartnerId = sa ? f.getReferrerPartnerId() : requiredPartner(u);
+        Long ownerPartnerId = sa ? readTenant(f.getPartnerId()) : null;
+        Long referrerPartnerId = sa ? f.getReferrerPartnerId() : null;
+        Long viewerPartnerId = sa ? null : requiredPartner(u);
         LocalDate from = f.getFromDate() == null ? MIN_DATE : f.getFromDate();
         LocalDate to = f.getToDate() == null ? MAX_DATE : f.getToDate();
-        Page<Referral> page = referralRepository.search(ownerPartnerId, referrerPartnerId, parseStatus(f.getStatus()),
+        Page<Referral> page = referralRepository.search(ownerPartnerId, referrerPartnerId, viewerPartnerId, parseStatus(f.getStatus()),
                 from, to, f.getSearchOrNull(), sa, f.toPageable("quoteDate,desc", SORT_FIELDS));
         Lookup lk = lookup(page.getContent(), sa);
         return PageResponse.of(page, r -> toResponse(r, lk, sa));
@@ -129,8 +144,8 @@ public class ReferralServiceImpl implements ReferralService {
     public ReferralSummaryResponseDto summary(Long partnerId, Long referrerPartnerId) {
         CurrentUser u = caller();
         boolean sa = u.isSuperAdmin();
-        Long ownerPartnerId = sa ? partnerId : null;
-        Long referrer = sa ? referrerPartnerId : requiredPartner(u);
+        Long ownerPartnerId = sa ? readTenant(partnerId) : null;
+        Long referrer = sa ? referrerPartnerId : requiredPartner(u);   // partner user: what the partner EARNED
 
         ReferralSummaryResponseDto s = new ReferralSummaryResponseDto();
         for (Object[] row : referralRepository.statusTotals(ownerPartnerId, referrer)) {
@@ -165,7 +180,7 @@ public class ReferralServiceImpl implements ReferralService {
     @Transactional(readOnly = true)
     public List<AuditLogResponseDto> history(Long id) {
         requireSuperAdmin(caller(), "Only Super Admin can see the referral history");
-        Referral r = referralRepository.findOne(id, null, null)
+        Referral r = referralRepository.findOne(id, readTenant(null), null, null)
                 .orElseThrow(() -> new ResourceNotFoundException("Referral not found"));
         return auditService.entityHistory("Referral", r.getId());
     }
@@ -186,7 +201,7 @@ public class ReferralServiceImpl implements ReferralService {
             t.setPartnerId(id);
             byPartner.put(id, t);
         }
-        for (Object[] row : referralRepository.totalsByReferrer(partnerIds)) {
+        for (Object[] row : referralRepository.totalsByReferrer(readTenant(null), partnerIds)) {
             ReferralPartnerTotalsResponseDto t = byPartner.get(((Number) row[0]).longValue());
             if (t == null) {
                 continue;
@@ -215,25 +230,29 @@ public class ReferralServiceImpl implements ReferralService {
     @Transactional
     public ReferralResponseDto markPaid(Long id, ReferralPaidRequestDto req) {
         CurrentUser u = caller();
-        requireSuperAdmin(u, "Only Super Admin can mark a referral as paid");
-        Referral r = referralRepository.findOne(id, null, null)
+        // Load without a tenant filter, then refuse (404 + [TENANT] WARN) anything outside the caller's own tenant.
+        Referral r = referralRepository.findOne(id, null, null, null)
                 .orElseThrow(() -> new ResourceNotFoundException("Referral not found"));
+        tenantResolver.assertWritable(r.getChannelPartnerId(), "Referral", id);
         if (r.getStatus() != ReferralStatus.APPROVED) {
-            throw new BusinessException("BUSINESS_RULE",
-                    "Only an approved referral can be marked as paid (this one is " + r.getStatus().name() + ")");
+            throw invalid("BUSINESS_RULE",
+                    "Only an approved referral can be marked as paid (this one is " + r.getStatus().name() + ")",
+                    "mark-paid refused, status " + r.getStatus().name() + " id=" + id);
         }
         LocalDate today = LocalDate.now(IST);
         if (req.getPaidOn().isAfter(today)) {
-            throw new BusinessException("VALIDATION_ERROR", "Paid date cannot be in the future");
+            throw invalid("VALIDATION_ERROR", "Paid date cannot be in the future", "mark-paid paidOn in the future id=" + id);
         }
         LocalDate earliest = r.getAcceptedOn() != null ? r.getAcceptedOn() : r.getQuoteDate();
         if (req.getPaidOn().isBefore(earliest)) {
-            throw new BusinessException("VALIDATION_ERROR", "Paid date cannot be before the quotation was accepted");
+            throw invalid("VALIDATION_ERROR", "Paid date cannot be before the quotation was accepted",
+                    "mark-paid paidOn before accepted date id=" + id);
         }
         ReferralPaymentMode mode = ReferralPaymentMode.valueOf(req.getPaymentMode());
         String reference = blankToNull(req.getPaymentReference());
         if (mode != ReferralPaymentMode.CASH && reference == null) {
-            throw new BusinessException("VALIDATION_ERROR", "Payment reference is required for " + mode.name());
+            throw invalid("VALIDATION_ERROR", "Payment reference is required for " + mode.name(),
+                    "mark-paid reference missing mode=" + mode.name() + " id=" + id);
         }
 
         Map<String, Object> before = snapshot(r);
@@ -251,7 +270,10 @@ public class ReferralServiceImpl implements ReferralService {
         });
 
         auditService.record(AuditAction.MARK_PAID, "REFERRAL", "Referral", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved)));
+                saved.getChannelPartnerId(), before, snapshot(saved));
+        log.info("[REFERRAL] marked paid id={} code={} partnerId={} referrerPartnerId={} amount={} mode={} paidOn={} {}",
+                saved.getId(), saved.getCode(), saved.getChannelPartnerId(), saved.getReferrerPartnerId(),
+                saved.getReferralAmount(), mode.name(), saved.getPaidOn(), Actors.describe());
         return detail(saved, true);
     }
 
@@ -270,7 +292,8 @@ public class ReferralServiceImpl implements ReferralService {
             return;
         }
         if (existing != null && existing.getStatus() == ReferralStatus.PAID) {
-            throw new BusinessException("BUSINESS_RULE", "The referral of this quotation is already paid and cannot be changed");
+            throw invalid("BUSINESS_RULE", "The referral of this quotation is already paid and cannot be changed",
+                    "sync refused, already paid id=" + existing.getId());
         }
 
         Referral r = existing != null ? existing : new Referral();
@@ -297,7 +320,10 @@ public class ReferralServiceImpl implements ReferralService {
         q.setReferralStatus(saved.getStatus());
 
         auditService.record(existing == null ? AuditAction.CREATE : AuditAction.UPDATE, "REFERRAL", "Referral",
-                saved.getId(), saved.getCode(), saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved)));
+                saved.getId(), saved.getCode(), saved.getChannelPartnerId(), before, snapshot(saved));
+        log.info("[REFERRAL] {} id={} code={} partnerId={} referrerPartnerId={} status={} amount={}",
+                existing == null ? "created" : "updated", saved.getId(), saved.getCode(), saved.getChannelPartnerId(),
+                saved.getReferrerPartnerId(), saved.getStatus(), saved.getReferralAmount());
     }
 
     @Override
@@ -312,8 +338,9 @@ public class ReferralServiceImpl implements ReferralService {
                 q.setReferralStatus(ReferralStatus.PAID);
                 return;
             }
-            throw new BusinessException("BUSINESS_RULE",
-                    "The referral of this quotation is already paid, so its status cannot be changed");
+            throw invalid("BUSINESS_RULE",
+                    "The referral of this quotation is already paid, so its status cannot be changed",
+                    "status change refused, already paid id=" + r.getId());
         }
         ReferralStatus target = statusFor(q.getStatus());
         q.setReferralStatus(target);
@@ -325,7 +352,9 @@ public class ReferralServiceImpl implements ReferralService {
         r.setAcceptedOn(target == ReferralStatus.APPROVED ? LocalDate.now(IST) : null);
         Referral saved = referralRepository.save(r);
         auditService.record(AuditAction.STATUS_CHANGE, "REFERRAL", "Referral", saved.getId(), saved.getCode(),
-                saved.getChannelPartnerId(), DiffUtil.diff(before, snapshot(saved)));
+                saved.getChannelPartnerId(), before, snapshot(saved));
+        log.info("[REFERRAL] status {} -> {} id={} code={} partnerId={}", before.get("status"), saved.getStatus(),
+                saved.getId(), saved.getCode(), saved.getChannelPartnerId());
     }
 
     @Override
@@ -335,6 +364,21 @@ public class ReferralServiceImpl implements ReferralService {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /** The tenant a Super Admin reads: own, or ONE other partner via ?viewPartnerId= on a GET. A client partnerId is ignored. */
+    private Long readTenant(Long clientPartnerId) {
+        Long tenant = tenantResolver.effectiveReadPartnerId();
+        if (clientPartnerId != null && !clientPartnerId.equals(tenant)) {
+            log.warn("[REFERRAL] client partnerId ignored requestedPartnerId={} {}", clientPartnerId, Actors.describe());
+        }
+        return tenant;
+    }
+
+    /** Logs a refusal at WARN (ids and reasons only, no payment reference or remarks) and returns the exception to throw. */
+    private BusinessException invalid(String code, String message, String logDetail) {
+        log.warn("[REFERRAL] {} {}", logDetail, Actors.describe());
+        return new BusinessException(code, message);
+    }
 
     private CurrentUser caller() {
         CurrentUser u = TenantContext.get();
@@ -360,7 +404,7 @@ public class ReferralServiceImpl implements ReferralService {
 
     private Referral findVisible(Long id, CurrentUser u) {
         boolean sa = u.isSuperAdmin();
-        return referralRepository.findOne(id, null, sa ? null : requiredPartner(u))
+        return referralRepository.findOne(id, sa ? readTenant(null) : null, null, sa ? null : requiredPartner(u))
                 .orElseThrow(() -> new ResourceNotFoundException("Referral not found"));
     }
 
@@ -371,7 +415,8 @@ public class ReferralServiceImpl implements ReferralService {
         r.setDeleted(true);
         referralRepository.save(r);
         auditService.record(AuditAction.DELETE, "REFERRAL", "Referral", r.getId(), r.getCode(),
-                r.getChannelPartnerId(), null);
+                r.getChannelPartnerId(), snapshot(r), null);
+        log.info("[REFERRAL] removed id={} code={} partnerId={}", r.getId(), r.getCode(), r.getChannelPartnerId());
     }
 
     private ReferralStatus statusFor(QuotationStatus s) {

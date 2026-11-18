@@ -7,7 +7,7 @@ public class DashboardRecentQuotationResponseDto {
 
     private String code;
     private String customerName;
-    /** Filled for Super Admin only (the table shows the Channel Partner column only for them). */
+    /** Filled only while a Super Admin views a partner (PARTNER_VIEW); null in the caller's own workspace. */
     private String partnerCode;
     private BigDecimal systemSizeKw;
     private BigDecimal totalAmount;

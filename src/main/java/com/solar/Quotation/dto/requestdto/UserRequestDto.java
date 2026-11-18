@@ -20,11 +20,12 @@ public class UserRequestDto {
     @Size(max = 30, message = "Phone is too long")
     private String phone;
 
-    @NotBlank(message = "Username is required")
+    /** Optional on create: when blank the server generates one (firstname.lastname). Ignored on update. */
     @Size(min = 3, max = 60, message = "Username must be 3 to 60 characters")
     @Pattern(regexp = "^[A-Za-z0-9._-]+$", message = "Username may contain letters, digits, dot, underscore and hyphen")
     private String username;
 
+    /** Optional on create: when blank the server generates a temporary password. Checked by PasswordPolicy. */
     @Size(max = 100, message = "Password is too long")
     private String password;
 
@@ -37,6 +38,7 @@ public class UserRequestDto {
     @Pattern(regexp = "ACTIVE|INACTIVE", message = "Status must be ACTIVE or INACTIVE")
     private String status;
 
+    /** Only honoured for Super Admin. A partner user always creates inside their own partner. */
     private Long partnerId;
 
     @Size(max = 300, message = "Photo path is too long")
